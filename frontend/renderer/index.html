@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Arvind Billing System</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+<link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <nav class="sidebar">
+    <div class="sidebar-brand">
+      <i class="fas fa-industry"></i>
+      <span>Arvind Billing</span>
+    </div>
+    <ul class="sidebar-nav">
+      <li><a href="#" data-page="dashboard" class="active"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a></li>
+      <li><a href="#" data-page="new-invoice"><i class="fas fa-plus-circle"></i><span>New Invoice</span></a></li>
+      <li><a href="#" data-page="invoices"><i class="fas fa-file-invoice-dollar"></i><span>Invoices</span></a></li>
+      <li><a href="#" data-page="customers"><i class="fas fa-users"></i><span>Customers</span></a></li>
+      <li><a href="#" data-page="products"><i class="fas fa-boxes-stacked"></i><span>Products</span></a></li>
+      <li class="nav-divider"></li>
+      <li><a href="#" data-page="ledger"><i class="fas fa-book"></i><span>Ledger</span></a></li>
+      <li><a href="#" data-page="reports"><i class="fas fa-chart-bar"></i><span>Reports</span></a></li>
+      <li><a href="#" data-page="settings"><i class="fas fa-cog"></i><span>Settings</span></a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <small>GSTIN: 24AAIFC6554D1ZN</small>
+    </div>
+  </nav>
+
+  <!-- ── Main Area ─────────────────────────────────────────────────────────── -->
+  <div class="main-area">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <h5 class="topbar-title" id="page-title">Dashboard</h5>
+      <div class="topbar-actions" id="topbar-actions"></div>
+    </div>
+
+    <!-- ══ DASHBOARD ══════════════════════════════════════════════════════ -->
+    <div id="page-dashboard" class="page active">
+      <div class="row g-3 mb-4" id="stat-cards">
+        <div class="col-sm-6 col-xl-3">
+          <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-file-invoice-dollar"></i></div>
+            <div class="stat-body"><div class="stat-label">This Month Invoices</div><div class="stat-value" id="s-month-invoices">—</div></div></div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+          <div class="stat-card green"><div class="stat-icon"><i class="fas fa-rupee-sign"></i></div>
+            <div class="stat-body"><div class="stat-label">This Month Revenue</div><div class="stat-value" id="s-month-revenue">—</div></div></div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+          <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-percent"></i></div>
+            <div class="stat-body"><div class="stat-label">This Month GST</div><div class="stat-value" id="s-month-gst">—</div></div></div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+          <div class="stat-card purple"><div class="stat-icon"><i class="fas fa-users"></i></div>
+            <div class="stat-body"><div class="stat-label">Total Customers</div><div class="stat-value" id="s-customers">—</div></div></div>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-xl-8">
+          <div class="card-panel">
+            <div class="panel-header"><span>Revenue — Last 6 Months</span></div>
+            <div class="panel-body"><canvas id="revenue-chart" height="240"></canvas></div>
+          </div>
+        </div>
+        <div class="col-xl-4">
+          <div class="card-panel h-100">
+            <div class="panel-header"><span>Quick Stats</span></div>
+            <div class="panel-body">
+              <div class="quick-stat"><span>Total Invoices</span><strong id="s-total-invoices">—</strong></div>
+              <div class="quick-stat"><span>Total Revenue</span><strong id="s-total-revenue">—</strong></div>
+              <div class="quick-stat"><span>Products</span><strong id="s-products">—</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card-panel mt-3">
+        <div class="panel-header">
+          <span>Recent Invoices</span>
+          <a href="#" data-page="invoices" class="btn btn-sm btn-outline-primary">View All</a>
+        </div>
+        <div class="panel-body p-0">
+          <table class="table table-hover mb-0" id="recent-table">
+            <thead><tr><th>Invoice No</th><th>Date</th><th>Customer</th><th class="text-end">Amount</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /dashboard -->
+
+    <!-- ══ NEW INVOICE ═════════════════════════════════════════════════════ -->
+    <div id="page-new-invoice" class="page">
+      <form id="invoice-form" autocomplete="off">
+        <div class="row g-3 mb-3">
+          <!-- Left: Invoice meta -->
+          <div class="col-md-6">
+            <div class="card-panel">
+              <div class="panel-header">Invoice Details</div>
+              <div class="panel-body">
+                <div class="row g-2">
+                  <div class="col-6">
+                    <label class="form-label">Invoice No <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="inv-no" required/>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label">Date <span class="text-danger">*</span></label>
+                    <input type="date" class="form-control" id="inv-date" required/>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label">Invoice Type</label>
+                    <select class="form-select" id="inv-type">
+                      <option>TAX INVOICE</option>
+                      <option>Debit Memo TAX INVOICE Original</option>
+                      <option>CREDIT NOTE</option>
+                      <option>PROFORMA INVOICE</option>
+                    </select>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label">Notes</label>
+                    <textarea class="form-control" id="inv-notes" rows="2"></textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Customer -->
+          <div class="col-md-6">
+            <div class="card-panel">
+              <div class="panel-header">Bill To</div>
+              <div class="panel-body">
+                <div class="row g-2">
+                  <div class="col-12">
+                    <label class="form-label">Customer <span class="text-danger">*</span></label>
+                    <select class="form-select" id="customer-select" required>
+                      <option value="">— Select Customer —</option>
+                    </select>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label">Address</label>
+                    <textarea class="form-control" id="cust-address" rows="2" readonly></textarea>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label">GSTIN</label>
+                    <input type="text" class="form-control" id="cust-gstin" readonly/>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label">State Code</label>
+                    <input type="text" class="form-control" id="cust-state" readonly/>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Line Items -->
+        <div class="card-panel mb-3">
+          <div class="panel-header">
+            <span>Line Items</span>
+            <button type="button" class="btn btn-sm btn-success" id="add-item-btn">
+              <i class="fas fa-plus"></i> Add Item
+            </button>
+          </div>
+          <div class="panel-body p-0">
+            <div class="table-responsive">
+              <table class="table table-bordered mb-0" id="items-table">
+                <thead class="table-dark">
+                  <tr>
+                    <th width="25%">Product</th>
+                    <th width="10%">HSN</th>
+                    <th width="8%">Qty</th>
+                    <th width="10%">Rate (₹)</th>
+                    <th width="8%">GST %</th>
+                    <th width="12%">Taxable (₹)</th>
+                    <th width="10%">CGST (₹)</th>
+                    <th width="10%">SGST (₹)</th>
+                    <th width="12%">Total (₹)</th>
+                    <th width="5%"></th>
+                  </tr>
+                </thead>
+                <tbody id="items-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Totals -->
+        <div class="row g-3">
+          <div class="col-md-7">
+            <div class="card-panel">
+              <div class="panel-header">Amount in Words</div>
+              <div class="panel-body">
+                <p class="mb-0 fw-bold text-primary" id="amount-words-display">—</p>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-5">
+            <div class="card-panel">
+              <div class="panel-body p-0">
+                <table class="table mb-0" id="totals-table">
+                  <tr><td>Taxable Amount</td><td class="text-end fw-semibold">₹ <span id="tot-taxable">0.00</span></td></tr>
+                  <tr><td>CGST</td><td class="text-end fw-semibold">₹ <span id="tot-cgst">0.00</span></td></tr>
+                  <tr><td>SGST</td><td class="text-end fw-semibold">₹ <span id="tot-sgst">0.00</span></td></tr>
+                  <tr><td>IGST</td><td class="text-end fw-semibold">₹ <span id="tot-igst">0.00</span></td></tr>
+                  <tr class="table-dark"><td><strong>GRAND TOTAL</strong></td><td class="text-end"><strong>₹ <span id="tot-grand">0.00</span></strong></td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+          <button type="submit" class="btn btn-primary btn-lg px-5">
+            <i class="fas fa-save"></i> Save Invoice
+          </button>
+          <button type="button" class="btn btn-outline-secondary btn-lg" id="clear-form-btn">
+            <i class="fas fa-redo"></i> Clear
+          </button>
+        </div>
+      </form>
+    </div><!-- /new-invoice -->
+
+    <!-- ══ INVOICE LIST ═════════════════════════════════════════════════════ -->
+    <div id="page-invoices" class="page">
+      <div class="card-panel mb-3">
+        <div class="panel-body">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+              <input type="text" class="form-control" id="inv-search" placeholder="Search invoice no or customer…"/>
+            </div>
+            <div class="col-md-3">
+              <input type="date" class="form-control" id="inv-filter-from" placeholder="From"/>
+            </div>
+            <div class="col-md-3">
+              <input type="date" class="form-control" id="inv-filter-to" placeholder="To"/>
+            </div>
+            <div class="col-md-2">
+              <button class="btn btn-primary w-100" id="inv-filter-btn"><i class="fas fa-search"></i> Filter</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card-panel">
+        <div class="panel-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0" id="invoices-table">
+              <thead class="table-dark">
+                <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th class="text-end">Taxable</th><th class="text-end">GST</th><th class="text-end">Grand Total</th><th>Status</th><th class="text-center">Actions</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="invoices-empty" class="text-center py-5 text-muted" style="display:none">
+            <i class="fas fa-file-invoice fa-3x mb-3"></i><br/>No invoices found
+          </div>
+        </div>
+      </div>
+    </div><!-- /invoices -->
+
+    <!-- ══ CUSTOMERS ═══════════════════════════════════════════════════════ -->
+    <div id="page-customers" class="page">
+      <div class="card-panel">
+        <div class="panel-header">
+          <span id="cust-count">Customers</span>
+          <button class="btn btn-sm btn-success" id="add-customer-btn"><i class="fas fa-plus"></i> Add Customer</button>
+        </div>
+        <div class="panel-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0" id="customers-table">
+              <thead class="table-dark">
+                <tr><th>#</th><th>Name</th><th>GSTIN</th><th>State</th><th>Phone</th><th class="text-end">Balance</th><th>Status</th><th class="text-center">Actions</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /customers -->
+
+    <!-- ══ PRODUCTS ════════════════════════════════════════════════════════ -->
+    <div id="page-products" class="page">
+      <div class="card-panel">
+        <div class="panel-header">
+          <span id="prod-count">Products</span>
+          <button class="btn btn-sm btn-success" id="add-product-btn"><i class="fas fa-plus"></i> Add Product</button>
+        </div>
+        <div class="panel-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0" id="products-table">
+              <thead class="table-dark">
+                <tr><th>#</th><th>Product Name</th><th>HSN Code</th><th>Default Rate (₹)</th><th>GST %</th><th>Unit</th><th class="text-center">Actions</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /products -->
+
+    <!-- ══ REPORTS ═════════════════════════════════════════════════════════ -->
+    <div id="page-reports" class="page">
+      <div class="row g-2 mb-3 align-items-center">
+        <div class="col-auto" id="month-picker-container">
+          <input type="month" class="form-control" id="report-month"/>
+        </div>
+        <div class="col-auto" id="year-picker-container" style="display:none;">
+          <select class="form-select" id="report-year"></select>
+        </div>
+        <div class="col-auto" id="date-picker-container" style="display:none;">
+          <div class="input-group">
+            <input type="date" class="form-control" id="report-start-date">
+            <span class="input-group-text">to</span>
+            <input type="date" class="form-control" id="report-end-date">
+          </div>
+        </div>
+        <div class="col-auto">
+          <select class="form-select" id="report-customer">
+            <option value="">All Customers</option>
+          </select>
+        </div>
+        <div class="col-auto ms-auto">
+          <div class="btn-group">
+            <div class="btn-group" role="group">
+              <button id="salesDropdownBtn" type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                Monthly sales
+              </button>
+              <ul class="dropdown-menu">
+                <li><a class="dropdown-item sales-opt" href="#" data-val="monthly">Monthly sales</a></li>
+                <li><a class="dropdown-item sales-opt" href="#" data-val="yearly">Yearly sales</a></li>
+                <li><a class="dropdown-item sales-opt" href="#" data-val="date">Date sales</a></li>
+                <li><a class="dropdown-item sales-opt" href="#" data-val="all">All sales</a></li>
+              </ul>
+            </div>
+            <button class="btn btn-outline-primary" id="report-gstr1-btn">GSTR-1</button>
+            <button class="btn btn-outline-primary" id="report-hsn-btn">HSN Summary</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Monthly Sales -->
+      <div id="report-monthly-view">
+        <div class="row g-3 mb-3">
+          <div class="col-sm-6 col-md-3"><div class="stat-card blue p-3 text-center"><div class="stat-label">Invoices</div><div class="stat-value" id="rpt-count">0</div></div></div>
+          <div class="col-sm-6 col-md-3"><div class="stat-card green p-3 text-center"><div class="stat-label">Taxable Amount</div><div class="stat-value" id="rpt-taxable">₹0</div></div></div>
+          <div class="col-sm-6 col-md-3"><div class="stat-card orange p-3 text-center"><div class="stat-label">Total GST</div><div class="stat-value" id="rpt-gst">₹0</div></div></div>
+          <div class="col-sm-6 col-md-3"><div class="stat-card purple p-3 text-center"><div class="stat-label">Grand Total</div><div class="stat-value" id="rpt-total">₹0</div></div></div>
+        </div>
+        <div class="card-panel">
+          <div class="panel-header d-flex justify-content-between align-items-center">
+            <span>Sales Data</span>
+            <button class="btn btn-sm btn-danger" id="report-bill-pdf-btn"><i class="fas fa-file-pdf"></i> Bill PDF</button>
+          </div>
+          <div class="panel-body p-0">
+            <table class="table table-hover mb-0" id="monthly-table">
+              <thead class="table-dark">
+                <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>Product(s)</th><th class="text-end">Total Qty</th><th class="text-end">Taxable</th><th class="text-end">CGST</th><th class="text-end">SGST</th><th class="text-end">Grand Total</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- GSTR-1 -->
+      <div id="report-gstr1-view" style="display:none">
+        <div class="card-panel">
+          <div class="panel-header"><span>GSTR-1 Data</span><button class="btn btn-sm btn-outline-success" id="gstr1-export-btn"><i class="fas fa-download"></i> Export CSV</button></div>
+          <div class="panel-body p-0">
+            <table class="table table-hover mb-0 table-sm" id="gstr1-table">
+              <thead class="table-dark">
+                <tr><th>Invoice No</th><th>Date</th><th>Customer</th><th>GSTIN</th><th>Product</th><th>HSN</th><th class="text-end">Qty</th><th class="text-end">Rate</th><th class="text-end">Taxable</th><th class="text-end">CGST</th><th class="text-end">SGST</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- HSN Summary -->
+      <div id="report-hsn-view" style="display:none">
+        <div class="card-panel">
+          <div class="panel-body p-0">
+            <table class="table table-hover mb-0" id="hsn-table">
+              <thead class="table-dark">
+                <tr><th>HSN Code</th><th>Product</th><th class="text-end">Total Qty</th><th class="text-end">Taxable</th><th class="text-end">CGST</th><th class="text-end">SGST</th><th>GST %</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /reports -->
+
+    <!-- ══ LEDGER ═══════════════════════════════════════════════════════════ -->
+    <div id="page-ledger" class="page">
+      <div class="row g-2 mb-3 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Select Customer</label>
+          <select class="form-select" id="ledger-customer">
+            <option value="">— Select Customer —</option>
+          </select>
+        </div>
+        <div class="col-md-8 text-end">
+          <span id="ledger-status"><span class="badge bg-secondary">—</span></span>
+        </div>
+      </div>
+
+      <!-- Balance Summary Cards -->
+      <div class="row g-3 mb-3">
+        <div class="col-sm-4">
+          <div class="stat-card green p-3 text-center">
+            <div class="stat-body"><div class="stat-label">Total Credit (Paid)</div><div class="stat-value" id="ledger-total-credit">₹0.00</div></div>
+          </div>
+        </div>
+        <div class="col-sm-4">
+          <div class="stat-card orange p-3 text-center">
+            <div class="stat-body"><div class="stat-label">Total Debit (Invoiced)</div><div class="stat-value" id="ledger-total-debit">₹0.00</div></div>
+          </div>
+        </div>
+        <div class="col-sm-4">
+          <div class="stat-card blue p-3 text-center">
+            <div class="stat-body"><div class="stat-label">Balance</div><div class="stat-value" id="ledger-balance">₹0.00</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Record Payment -->
+      <div class="card-panel mb-3">
+        <div class="panel-header"><span><i class="fas fa-plus-circle me-2"></i>Record Payment</span></div>
+        <div class="panel-body">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-2">
+              <label class="form-label">Amount (₹) <span class="text-danger">*</span></label>
+              <input type="number" step="0.01" min="0" class="form-control" id="ledger-pay-amount" placeholder="0.00"/>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Description</label>
+              <input type="text" class="form-control" id="ledger-pay-desc" placeholder="e.g. Advance payment"/>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label">Mode</label>
+              <select class="form-select" id="ledger-pay-mode">
+                <option>Cash</option>
+                <option>UPI</option>
+                <option>Bank Transfer</option>
+                <option>Cheque</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Reference</label>
+              <input type="text" class="form-control" id="ledger-pay-ref" placeholder="e.g. UPI Txn ID"/>
+            </div>
+            <div class="col-md-2">
+              <button class="btn btn-success w-100" id="ledger-payment-btn"><i class="fas fa-check me-1"></i>Record</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Transaction History -->
+      <div class="card-panel">
+        <div class="panel-header"><span><i class="fas fa-history me-2"></i>Transaction History</span></div>
+        <div class="panel-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0" id="ledger-table">
+              <thead class="table-dark">
+                <tr><th>Date</th><th>Type</th><th class="text-end">Amount</th><th>Description</th><th>Reference</th><th class="text-end">Running Balance</th></tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="6" class="text-center text-muted py-4">Select a customer to view ledger</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /ledger -->
+
+    <!-- ══ SETTINGS ════════════════════════════════════════════════════════ -->
+    <div id="page-settings" class="page">
+      <form id="settings-form">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="card-panel">
+              <div class="panel-header">Company Information</div>
+              <div class="panel-body">
+                <div class="mb-2"><label class="form-label fw-semibold">Company Name</label><input type="text" class="form-control" name="name"/></div>
+                <div class="mb-2"><label class="form-label fw-semibold">Address</label><textarea class="form-control" name="address" rows="3"></textarea></div>
+                <div class="row g-2">
+                  <div class="col-6"><label class="form-label fw-semibold">GSTIN</label><input type="text" class="form-control" name="gstin" maxlength="15"/></div>
+                  <div class="col-3"><label class="form-label fw-semibold">State Code</label><input type="text" class="form-control" name="state_code" maxlength="2"/></div>
+                  <div class="col-3"><label class="form-label fw-semibold">State Name</label><input type="text" class="form-control" name="state_name"/></div>
+                </div>
+                <div class="row g-2 mt-1">
+                  <div class="col-6"><label class="form-label fw-semibold">Phone</label><input type="text" class="form-control" name="phone"/></div>
+                  <div class="col-6"><label class="form-label fw-semibold">Email</label><input type="email" class="form-control" name="email"/></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="card-panel mb-3">
+              <div class="panel-header">Invoice Settings</div>
+              <div class="panel-body">
+                <div class="row g-2">
+                  <div class="col-6"><label class="form-label fw-semibold">Invoice Prefix</label><input type="text" class="form-control" name="invoice_prefix" placeholder="GT/"/></div>
+                  <div class="col-6"><label class="form-label fw-semibold">Next Invoice No.</label><input type="text" class="form-control" name="next_invoice_no" placeholder="31"/></div>
+                </div>
+                <div class="mt-2"><label class="form-label fw-semibold">Terms &amp; Conditions</label><textarea class="form-control" name="terms" rows="5"></textarea></div>
+              </div>
+            </div>
+            <div class="card-panel">
+              <div class="panel-header">Bank Details</div>
+              <div class="panel-body">
+                <div class="row g-2">
+                  <div class="col-6"><label class="form-label fw-semibold">Bank Name</label><input type="text" class="form-control" name="bank_name"/></div>
+                  <div class="col-6"><label class="form-label fw-semibold">Account No.</label><input type="text" class="form-control" name="bank_account"/></div>
+                  <div class="col-6"><label class="form-label fw-semibold">IFSC Code</label><input type="text" class="form-control" name="bank_ifsc"/></div>
+                  <div class="col-6"><label class="form-label fw-semibold">Branch</label><input type="text" class="form-control" name="bank_branch"/></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mt-3">
+          <button type="submit" class="btn btn-primary btn-lg px-5"><i class="fas fa-save"></i> Save Settings</button>
+        </div>
+      </form>
+    </div><!-- /settings -->
+
+  </div><!-- /main-area -->
+</div><!-- /layout -->
+
+<!-- ══ MODALS ═══════════════════════════════════════════════════════════════ -->
+
+<!-- Customer Modal -->
+<div class="modal fade" id="customerModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="customerModalTitle">Add Customer</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="customer-form">
+          <input type="hidden" id="cust-id"/>
+          <div class="row g-3">
+            <div class="col-12"><label class="form-label fw-semibold">Name <span class="text-danger">*</span></label><input type="text" class="form-control" id="cust-name" required/></div>
+            <div class="col-12"><label class="form-label fw-semibold">Address</label><textarea class="form-control" id="cust-addr" rows="2"></textarea></div>
+            <div class="col-md-5"><label class="form-label fw-semibold">GSTIN</label><input type="text" class="form-control" id="cust-gstin-inp" maxlength="15" placeholder="24XXXXX0000X1ZX"/></div>
+            <div class="col-md-3"><label class="form-label fw-semibold">State Code</label><input type="text" class="form-control" id="cust-state-inp" maxlength="2" placeholder="24"/></div>
+            <div class="col-md-4"><label class="form-label fw-semibold">Phone</label><input type="text" class="form-control" id="cust-phone"/></div>
+            <div class="col-md-6"><label class="form-label fw-semibold">Email</label><input type="email" class="form-control" id="cust-email"/></div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="save-customer-btn">Save Customer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Product Modal -->
+<div class="modal fade" id="productModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="productModalTitle">Add Product</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="product-form">
+          <input type="hidden" id="prod-id"/>
+          <div class="row g-3">
+            <div class="col-12"><label class="form-label fw-semibold">Product Name <span class="text-danger">*</span></label><input type="text" class="form-control" id="prod-name" required/></div>
+            <div class="col-6"><label class="form-label fw-semibold">HSN Code</label><input type="text" class="form-control" id="prod-hsn"/></div>
+            <div class="col-6"><label class="form-label fw-semibold">Unit</label><input type="text" class="form-control" id="prod-unit" placeholder="PCS"/></div>
+            <div class="col-6"><label class="form-label fw-semibold">Default Rate (₹)</label><input type="number" step="0.01" class="form-control" id="prod-rate" placeholder="0.00"/></div>
+            <div class="col-6"><label class="form-label fw-semibold">GST %</label>
+              <select class="form-select" id="prod-gst">
+                <option value="0">0%</option><option value="5">5%</option>
+                <option value="12">12%</option><option value="18" selected>18%</option>
+                <option value="28">28%</option>
+              </select>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="save-product-btn">Save Product</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Invoice View Modal -->
+<div class="modal fade" id="invoiceViewModal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="inv-view-title">Invoice Details</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="inv-view-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-primary" id="modal-pdf-btn"><i class="fas fa-file-pdf"></i> Open PDF</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index:9999">
+  <div id="toast" class="toast align-items-center border-0" role="alert">
+    <div class="d-flex">
+      <div class="toast-body" id="toast-msg">Message</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+<script src="js/dashboard.js"></script>
+<script src="js/invoices.js"></script>
+<script src="js/customers.js"></script>
+<script src="js/products.js"></script>
+<script src="js/reports.js"></script>
+<script src="js/ledger.js"></script>
+<script src="js/settings.js"></script>
+</body>
+</html>
