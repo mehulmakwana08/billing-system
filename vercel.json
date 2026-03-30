@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
   "functions": {
     "api/index.py": {
       "excludeFiles": "{backend/__pycache__/**,backend/test_*.py,backend/test_api*.py,backend/cloud_test.db}"
