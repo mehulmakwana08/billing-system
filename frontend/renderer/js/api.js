@@ -1,7 +1,12 @@
 /* api.js — Hybrid cloud + offline API client */
 
 const API = (() => {
-  const LOCAL_BASE = 'http://localhost:5000/api'
+  const LOCAL_BASE = (() => {
+    if (typeof window !== 'undefined' && window.location && window.location.protocol !== 'file:') {
+      return `${window.location.origin}/api`
+    }
+    return 'http://localhost:5000/api'
+  })()
   const DEFAULT_CLOUD_BASE = 'https://api.yourdomain.com/api'
   const PLACEHOLDER_HOSTS = new Set([
     'api.yourdomain.com',

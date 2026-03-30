@@ -69,8 +69,13 @@ def serve_web(path):
     index_path = os.path.join(FRONTEND_DIR, 'index.html')
     if os.path.exists(index_path):
         requested_file = os.path.join(FRONTEND_DIR, path)
-        if path and os.path.isfile(requested_file):
-            return send_from_directory(FRONTEND_DIR, path)
+        if path:
+            if os.path.isfile(requested_file):
+                return send_from_directory(FRONTEND_DIR, path)
+            # Missing file-like routes should return 404, not SPA HTML.
+            # This lets the frontend onerror fallback load CDN assets in web deployments.
+            if os.path.splitext(path)[1]:
+                return '', 404
         return send_file(index_path)
 
     return jsonify({'status': 'ok', 'message': 'Billing backend is running.'}), 200
