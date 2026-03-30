@@ -7,6 +7,33 @@ const fs = require('fs')
 let mainWindow
 let flaskProcess
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) {
+  app.quit()
+  process.exit(0)
+}
+
+app.on('second-instance', () => {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
+})
+
+function probeFlask(timeoutMs = 1000) {
+  return new Promise(resolve => {
+    const req = http.get('http://localhost:5000/api/health', res => {
+      res.resume()
+      resolve(res.statusCode === 200)
+    })
+
+    req.on('error', () => resolve(false))
+    req.setTimeout(timeoutMs, () => {
+      req.destroy()
+      resolve(false)
+    })
+  })
+}
+
 // ── Find Python ──────────────────────────────────────────────────────────────
 function getPython() {
   if (process.platform === 'win32') {
@@ -133,8 +160,14 @@ ipcMain.handle('confirm', async (event, { message, detail }) => {
 })
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
-  startFlask()
+app.whenReady().then(async () => {
+  const backendReady = await probeFlask()
+  if (backendReady) {
+    console.log('[Electron] Reusing existing Flask backend on port 5000')
+  } else {
+    startFlask()
+  }
+
   waitForFlask(createWindow)
 
   app.on('activate', () => {

@@ -269,12 +269,20 @@ document.getElementById('report-bill-pdf-btn')?.addEventListener('click', async 
   try {
     toast('Generating Report PDF...', 'info')
     const data = await API.get(url)
+    const target = data.path || data.pdf_url
+    if (!target) {
+      throw new Error('No PDF path returned')
+    }
+    if (String(target).startsWith('http')) {
+      window.open(target, '_blank')
+      return
+    }
     if (window.electronAPI) {
-      const result = await window.electronAPI.openPDF(data.path)
+      const result = await window.electronAPI.openPDF(target)
       if (!result.success) toast('Could not open PDF: ' + result.error, 'error')
     } else {
       // Browser fallback - Since it doesn't stream the PDF directly, just alert
-      toast('PDF saved to: ' + data.path, 'success')
+      toast('PDF saved to: ' + target, 'success')
     }
   } catch (e) {
     toast('Failed to generate PDF: ' + e.message, 'error')

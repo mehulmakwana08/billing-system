@@ -1,3 +1,9 @@
+import os
+import re
+import tempfile
+from urllib.parse import quote
+
+import requests
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
@@ -309,3 +315,108 @@ def generate_invoice_pdf(inv, path):
     ))
 
     doc.build(story)
+
+
+def _safe_invoice_no(invoice_no):
+    if not invoice_no:
+        return "invoice"
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(invoice_no))
+
+
+def _storage_key_from_invoice(invoice):
+    company_id = invoice.get("company_id") or 1
+    date_text = str(invoice.get("date") or "")
+    year = "unknown"
+    month = "00"
+    if len(date_text) >= 7 and "-" in date_text:
+        parts = date_text.split("-")
+        if len(parts) >= 2:
+            year = parts[0]
+            month = parts[1]
+    invoice_no = _safe_invoice_no(invoice.get("invoice_no", "invoice"))
+    return f"invoices/{company_id}/{year}/{month}/{invoice_no}.pdf"
+
+
+def upload_to_supabase(file_path, key):
+    """Upload a local file to Supabase Storage and return a URL."""
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    supabase_bucket = os.getenv("SUPABASE_STORAGE_BUCKET") or os.getenv("SUPABASE_BUCKET", "invoices")
+    supabase_key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("SUPABASE_SERVICE_KEY")
+        or os.getenv("SUPABASE_ANON_KEY")
+    )
+    url_mode = os.getenv("SUPABASE_URL_MODE", "public").lower()
+    signed_ttl = int(os.getenv("SUPABASE_SIGNED_URL_TTL", "3600"))
+    bucket_path = quote(str(supabase_bucket), safe='')
+    object_path = quote(str(key), safe='/')
+
+    if not supabase_url or not supabase_key:
+        raise RuntimeError(
+            "Supabase credentials missing: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
+        )
+
+    upload_url = f"{supabase_url}/storage/v1/object/{bucket_path}/{object_path}"
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/pdf",
+        "x-upsert": "true",
+    }
+    with open(file_path, "rb") as fd:
+        resp = requests.post(upload_url, headers=headers, data=fd.read(), timeout=30)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Supabase upload failed: {resp.status_code} {resp.text}")
+
+    if url_mode == "public":
+        return f"{supabase_url}/storage/v1/object/public/{bucket_path}/{object_path}"
+
+    signed_url = f"{supabase_url}/storage/v1/object/sign/{bucket_path}/{object_path}"
+    signed_headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+    }
+    signed_resp = requests.post(
+        signed_url,
+        headers=signed_headers,
+        json={"expiresIn": signed_ttl},
+        timeout=30,
+    )
+    if signed_resp.status_code != 200:
+        raise RuntimeError(f"Supabase signed URL failed: {signed_resp.status_code} {signed_resp.text}")
+    token = signed_resp.json().get("signedURL")
+    if not token:
+        raise RuntimeError("Supabase signed URL missing in response")
+    return f"{supabase_url}/storage/v1{token}"
+
+
+def generate_pdf(invoice, mode="local"):
+    """
+    Generate invoice PDF in local or cloud mode.
+
+    mode="local": stores under backend/bills and returns local file path.
+    mode="cloud": writes temp file, uploads to Supabase, and returns cloud URL.
+    """
+    safe_no = _safe_invoice_no(invoice.get("invoice_no", "invoice"))
+    base_dir = os.path.dirname(__file__)
+    bills_dir = os.path.join(base_dir, "bills")
+    os.makedirs(bills_dir, exist_ok=True)
+
+    if mode == "local":
+        output_path = os.path.join(bills_dir, f"Invoice_{safe_no}.pdf")
+        generate_invoice_pdf(invoice, output_path)
+        return output_path
+
+    if mode == "cloud":
+        with tempfile.NamedTemporaryFile(prefix="invoice_", suffix=".pdf", delete=False) as tmp:
+            temp_path = tmp.name
+        try:
+            generate_invoice_pdf(invoice, temp_path)
+            storage_key = _storage_key_from_invoice(invoice)
+            return upload_to_supabase(temp_path, storage_key)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    raise ValueError("mode must be either 'local' or 'cloud'")

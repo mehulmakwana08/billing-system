@@ -44,3 +44,10 @@ frontend/.vite/
 Thumbs.db
 *.swp
 *.swo
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+/.agents
+.vercel
