@@ -51,3 +51,4 @@ Thumbs.db
 !.env.example
 /.agents
 .vercel
+.env*.local
