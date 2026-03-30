@@ -14,6 +14,8 @@ load_dotenv()
 APP_MODE = os.getenv('APP_MODE', 'offline').lower()  # offline | cloud
 AUTH_REQUIRED = os.getenv('AUTH_REQUIRED', '0') == '1' or APP_MODE == 'cloud'
 PUBLIC_PATHS = {'/api/health', '/api/auth/register', '/api/auth/login'}
+DEFAULT_ADMIN_USERNAME = (os.getenv('DEFAULT_ADMIN_USERNAME', 'admin') or 'admin').strip().lower()
+DEFAULT_ADMIN_PASSWORD_HASH = (os.getenv('DEFAULT_ADMIN_PASSWORD_HASH') or '').strip()
 
 
 def current_company_id():
@@ -128,6 +130,34 @@ def _migrate_company_to_company_settings(conn):
             """,
             (row['key'], row['value']),
         )
+
+
+def ensure_default_admin_user(conn):
+    username = DEFAULT_ADMIN_USERNAME
+    password_hash = DEFAULT_ADMIN_PASSWORD_HASH
+    if not username or not password_hash:
+        return
+
+    existing = conn.execute(
+        "SELECT id, password_hash FROM users WHERE lower(email)=?",
+        (username,),
+    ).fetchone()
+
+    if existing:
+        if existing['password_hash'] != password_hash:
+            conn.execute(
+                "UPDATE users SET password_hash=?, updated_at=datetime('now') WHERE id=?",
+                (password_hash, existing['id']),
+            )
+        return
+
+    conn.execute(
+        """
+        INSERT INTO users (email, password_hash, company_id, created_at, updated_at)
+        VALUES (?, ?, 1, datetime('now'), datetime('now'))
+        """,
+        (username, password_hash),
+    )
 
 def init_db():
     conn = get_db()
@@ -325,6 +355,9 @@ def init_db():
     c.execute(
         "CREATE INDEX IF NOT EXISTS idx_users_company_email ON users(company_id, email)"
     )
+
+    ensure_default_admin_user(conn)
+
     conn.commit()
     conn.close()
 
@@ -444,27 +477,33 @@ def auth_register():
 @app.route('/api/auth/login', methods=['POST'])
 def auth_login():
     data = request.json or {}
-    email = (data.get('email') or '').strip().lower()
+    username = (data.get('username') or data.get('email') or '').strip().lower()
     password = data.get('password') or ''
 
-    if not email or not password:
-        return jsonify({'error': 'email and password are required'}), 400
+    if not username or not password:
+        return jsonify({'error': 'username and password are required'}), 400
 
     conn = get_db()
     user = conn.execute(
-        'SELECT id, email, password_hash, company_id FROM users WHERE email=?',
-        (email,),
+        'SELECT id, email, password_hash, company_id FROM users WHERE lower(email)=?',
+        (username,),
     ).fetchone()
-    conn.close()
 
     if not user or not verify_password(password, user['password_hash']):
+        conn.close()
         return jsonify({'error': 'invalid credentials'}), 401
 
     token = issue_token(user['id'], user['company_id'], user['email'])
+    conn.close()
     return jsonify(
         {
             'token': token,
-            'user': {'id': user['id'], 'email': user['email'], 'company_id': user['company_id']},
+            'user': {
+                'id': user['id'],
+                'email': user['email'],
+                'username': user['email'],
+                'company_id': user['company_id'],
+            },
         }
     )
 
@@ -472,7 +511,14 @@ def auth_login():
 @app.route('/api/auth/me', methods=['GET'])
 @require_auth
 def auth_me():
-    return jsonify({'id': g.user_id, 'email': g.user_email, 'company_id': current_company_id()})
+    return jsonify(
+        {
+            'id': g.user_id,
+            'email': g.user_email,
+            'username': g.user_email,
+            'company_id': current_company_id(),
+        }
+    )
 
 # ── Company ───────────────────────────────────────────────────────────────────
 

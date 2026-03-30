@@ -238,7 +238,8 @@ function refreshAuthUI(user) {
     refreshSyncStatus()
     return
   }
-  userEl.textContent = `${user.email} (Company ${user.company_id})`
+  const displayName = user.username || user.email || 'User'
+  userEl.textContent = `${displayName} (Company ${user.company_id})`
   openBtn.classList.add('d-none')
   logoutBtn.classList.remove('d-none')
   refreshSyncStatus()
@@ -266,14 +267,14 @@ async function syncAuthState() {
 }
 
 async function authLogin() {
-  const email = document.getElementById('login-email').value.trim()
+  const username = document.getElementById('login-username').value.trim()
   const password = document.getElementById('login-password').value
-  if (!email || !password) {
-    toast('Enter email and password', 'error')
+  if (!username || !password) {
+    toast('Enter username and password', 'error')
     return
   }
   try {
-    const res = await API.post('/auth/login', { email, password })
+    const res = await API.post('/auth/login', { username, password })
     API.setToken(res.token)
     refreshAuthUI(res.user)
     getAuthModal().hide()
