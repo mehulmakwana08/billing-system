@@ -1160,8 +1160,8 @@ def dashboard():
 
 # ── Reports ───────────────────────────────────────────────────────────────────
 
-def get_date_filter_ext(req):
-    period_type = req.args.get('period_type')
+def get_date_filter_ext(req, period_type_override=None):
+    period_type = period_type_override or req.args.get('period_type')
     if period_type == 'yearly':
         year = req.args.get('year', str(date.today().year))
         return "strftime('%Y', i.date)=?", [year], year
@@ -1179,11 +1179,15 @@ def get_date_filter_ext(req):
 
 @app.route('/api/reports/monthly')
 def monthly_report():
+    return jsonify(_build_sales_report_payload())
+
+
+def _build_sales_report_payload(period_type_override=None):
     company_id = current_company_id()
     customer_id = request.args.get('customer_id')
     conn = get_db()
     
-    date_filter, date_params, period_str = get_date_filter_ext(request)
+    date_filter, date_params, period_str = get_date_filter_ext(request, period_type_override)
     base_params = [company_id] + list(date_params)
     
     query = f"""
@@ -1221,7 +1225,13 @@ def monthly_report():
     summary_dict = dict(summary)
     summary_dict['total_qty'] = sum(r['total_qty'] for r in invoices)
     
-    return jsonify({'month': period_str, 'invoices': [dict(r) for r in invoices], 'summary': summary_dict})
+    return {'month': period_str, 'invoices': [dict(r) for r in invoices], 'summary': summary_dict}
+
+
+@app.route('/api/reports/yearly')
+def yearly_report_compat():
+    # Legacy route kept for compatibility; yearly filtering now shares monthly report logic.
+    return jsonify(_build_sales_report_payload(period_type_override='yearly'))
 
 @app.route('/api/reports/sales-pdf')
 def sales_report_pdf():
@@ -1384,6 +1394,12 @@ def hsn_summary():
     conn.close()
     return jsonify([dict(r) for r in rows])
 
+
+@app.route('/api/reports/hsn')
+def hsn_summary_compat():
+    # Legacy alias for older clients.
+    return hsn_summary()
+
 @app.route('/api/reports/customer-ledger')
 def customer_ledger():
     company_id = current_company_id()
@@ -1399,6 +1415,44 @@ def customer_ledger():
     rows = conn.execute(q, params).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/ledger/summary')
+def ledger_summary_compat():
+    # Legacy endpoint: when customer_id is provided, reuse canonical ledger history response.
+    # If omitted, return aggregate ledger totals for the whole company.
+    cid = request.args.get('customer_id', type=int)
+    if cid:
+        return ledger_history(cid)
+
+    company_id = current_company_id()
+    conn = get_db()
+    row = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN type='credit' THEN amount ELSE 0 END), 0) AS total_credit,
+            COALESCE(SUM(CASE WHEN type='debit' THEN amount ELSE 0 END), 0) AS total_debit
+        FROM customer_ledger
+        WHERE company_id=?
+        """,
+        (company_id,),
+    ).fetchone()
+    conn.close()
+
+    total_credit = float(row['total_credit'] or 0)
+    total_debit = float(row['total_debit'] or 0)
+    balance = round(total_credit - total_debit, 2)
+    status = 'Settled' if abs(balance) < 1e-9 else ('Overpaid' if balance > 0 else 'Due')
+
+    return jsonify(
+        {
+            'entries': [],
+            'total_credit': round(total_credit, 2),
+            'total_debit': round(total_debit, 2),
+            'balance': balance,
+            'status': status,
+        }
+    )
 
 
 # ── Sync & Offline Number Blocks ─────────────────────────────────────────────
