@@ -15,28 +15,41 @@
     document.getElementById('fontawesome-css').href = isFile
       ? '../node_modules/@fortawesome/fontawesome-free/css/all.min.css'
       : 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css'
-  })()
-</script>
-<link rel="stylesheet" href="css/style.css"/>
-</head>
-<body>
+  <script>
+    (function () {
+      const isFile = window.location.protocol === 'file:'
+      const scripts = [
+        isFile
+          ? '../node_modules/bootstrap/dist/js/bootstrap.bundle.min.js'
+          : 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js',
+        isFile
+          ? '../node_modules/chart.js/dist/chart.umd.js'
+          : 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
+        'js/api.js',
+        'js/app.js',
+        'js/dashboard.js',
+        'js/invoices.js',
+        'js/customers.js',
+        'js/products.js',
+        'js/ledger.js',
+        'js/reports.js',
+        'js/settings.js'
+      ]
 
-<div class="layout">
+      const loadSequentially = (index) => {
+        if (index >= scripts.length) return
+        const script = document.createElement('script')
+        script.src = scripts[index]
+        script.onload = () => loadSequentially(index + 1)
+        script.onerror = () => {
+          console.error('Failed to load script:', scripts[index])
+        }
+        document.body.appendChild(script)
+      }
 
-  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
-  <nav class="sidebar">
-    <div class="sidebar-brand">
-      <i class="fas fa-industry"></i>
-      <span>Arvind Billing</span>
-    </div>
-    <ul class="sidebar-nav">
-      <li><a href="#" data-page="dashboard" class="active"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a></li>
-      <li><a href="#" data-page="new-invoice"><i class="fas fa-plus-circle"></i><span>New Invoice</span></a></li>
-      <li><a href="#" data-page="invoices"><i class="fas fa-file-invoice-dollar"></i><span>Invoices</span></a></li>
-      <li><a href="#" data-page="customers"><i class="fas fa-users"></i><span>Customers</span></a></li>
-      <li><a href="#" data-page="products"><i class="fas fa-boxes-stacked"></i><span>Products</span></a></li>
-      <li class="nav-divider"></li>
-      <li><a href="#" data-page="ledger"><i class="fas fa-book"></i><span>Ledger</span></a></li>
+      loadSequentially(0)
+    })()
+  </script>
       <li><a href="#" data-page="reports"><i class="fas fa-chart-bar"></i><span>Reports</span></a></li>
       <li><a href="#" data-page="settings"><i class="fas fa-cog"></i><span>Settings</span></a></li>
     </ul>
