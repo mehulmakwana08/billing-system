@@ -121,6 +121,9 @@ async function authLogin() {
     const res = await API.post('/auth/login', { username, password })
     API.setToken(res.token)
     refreshAuthUI(res.user)
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur()
+    }
     getAuthModal().hide()
     await initializeAuthorizedSession()
     toast('Signed in', 'success')

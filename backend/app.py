@@ -225,6 +225,12 @@ def _rewrite_sql_for_postgres(query):
         if 'ON CONFLICT' not in text.upper():
             text = f"{text} ON CONFLICT DO NOTHING"
 
+    text = text.replace("strftime('%Y-%m', i.date)", "substring(i.date from 1 for 7)")
+    text = text.replace("strftime('%Y', i.date)", "substring(i.date from 1 for 4)")
+    text = text.replace("strftime('%Y-%m', date)", "substring(date from 1 for 7)")
+    text = text.replace("strftime('%Y', date)", "substring(date from 1 for 4)")
+    text = text.replace("date('now','-6 months')", "TO_CHAR(CURRENT_DATE - INTERVAL '6 months', 'YYYY-MM-DD')")
+
     text = text.replace("datetime('now')", 'CURRENT_TIMESTAMP')
     text = text.replace('datetime("now")', 'CURRENT_TIMESTAMP')
     text = text.replace('AUTOINCREMENT', '')
@@ -245,7 +251,10 @@ class PostgresCursorAdapter:
             self.rowcount = 0
             return self
 
-        self._raw_cursor.execute(rewritten, params or ())
+        if params is None:
+            self._raw_cursor.execute(rewritten)
+        else:
+            self._raw_cursor.execute(rewritten, params)
         self.rowcount = self._raw_cursor.rowcount
         self.lastrowid = None
 
