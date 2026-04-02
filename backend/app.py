@@ -1,8 +1,15 @@
 from flask import Flask, request, jsonify, send_file, send_from_directory, g
-import sqlite3, os, json, re
+import sqlite3, os, json, re, threading
 from datetime import datetime, date
+from urllib.parse import quote
+
+import psycopg2
+import requests
+from psycopg2 import IntegrityError as PsycopgIntegrityError
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 from auth import AuthError, hash_password, issue_token, load_auth_context, require_auth, verify_password
+from database import _normalize_database_url
 from pdf_generator import generate_invoice_pdf, generate_pdf
 from num_words import num_to_words
 from sync_service import enqueue_sync
@@ -10,6 +17,13 @@ from sync_service import enqueue_sync
 app = Flask(__name__)
 
 load_dotenv()
+
+
+def _env_clean(name, default=''):
+    raw_value = os.getenv(name, default)
+    if raw_value is None:
+        return ''
+    return str(raw_value).replace('\ufeff', '').strip().strip('"').strip("'")
 
 APP_MODE = os.getenv('APP_MODE', 'offline').lower()  # offline | cloud
 CLOUD_ONLY_MODE = os.getenv('CLOUD_ONLY_MODE', '1') == '1'
@@ -134,6 +148,49 @@ BILLS_DIR = os.getenv('BILLING_BILLS_DIR') or default_bills_dir
 FRONTEND_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'frontend', 'renderer')
 )
+DATABASE_URL_RAW = _env_clean('DATABASE_URL')
+DATABASE_URL = _normalize_database_url(DATABASE_URL_RAW) if DATABASE_URL_RAW else ''
+FORCE_POSTGRES = _env_clean('FORCE_POSTGRES', '0') == '1'
+USE_POSTGRES = bool(DATABASE_URL) and (FORCE_POSTGRES or bool(os.getenv('VERCEL')) or APP_MODE == 'cloud')
+
+if USE_POSTGRES:
+    from database import engine as POSTGRES_ENGINE
+    from models import Base as ORMBase
+else:
+    POSTGRES_ENGINE = None
+    ORMBase = None
+
+if (FORCE_POSTGRES or bool(os.getenv('VERCEL')) or APP_MODE == 'cloud') and not DATABASE_URL:
+    raise RuntimeError('DATABASE_URL is required when Postgres mode is enabled.')
+
+SUPABASE_BASE_URL = _env_clean('SUPABASE_URL').rstrip('/')
+SUPABASE_SERVICE_KEY = (
+    _env_clean('SUPABASE_SERVICE_ROLE_KEY')
+    or _env_clean('SUPABASE_SERVICE_KEY')
+    or _env_clean('SUPABASE_ANON_KEY')
+)
+DB_SNAPSHOT_BUCKET = (
+    _env_clean('SUPABASE_DB_SNAPSHOT_BUCKET')
+    or _env_clean('SUPABASE_STORAGE_BUCKET')
+    or _env_clean('SUPABASE_BUCKET')
+    or 'invoices'
+)
+DB_SNAPSHOT_KEY = _env_clean('SUPABASE_DB_SNAPSHOT_KEY', 'system/billing.db') or 'system/billing.db'
+DB_SNAPSHOT_ENABLED = (
+    (not USE_POSTGRES)
+    and
+    _env_clean('ENABLE_DB_SNAPSHOT', '1') == '1'
+    and bool(os.getenv('VERCEL'))
+    and bool(SUPABASE_BASE_URL)
+    and bool(SUPABASE_SERVICE_KEY)
+)
+DB_PERSISTENCE_MODE = (
+    'postgres'
+    if USE_POSTGRES
+    else ('supabase-storage-snapshot' if DB_SNAPSHOT_ENABLED else ('ephemeral-tmp' if os.getenv('VERCEL') else 'local-file'))
+)
+_DB_SNAPSHOT_LOCK = threading.Lock()
+DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError, PsycopgIntegrityError)
 db_dir = os.path.dirname(DB_PATH)
 if db_dir:
     os.makedirs(db_dir, exist_ok=True)
@@ -141,14 +198,244 @@ os.makedirs(BILLS_DIR, exist_ok=True)
 
 # ── DB Helpers ────────────────────────────────────────────────────────────────
 
+def _rewrite_sql_for_postgres(query):
+    if query is None:
+        return None
+
+    text = str(query)
+    stripped = text.strip()
+    if not stripped:
+        return text
+
+    upper = stripped.upper()
+    if upper.startswith('PRAGMA '):
+        return None
+    if upper.startswith('BEGIN IMMEDIATE'):
+        return 'BEGIN'
+
+    if re.search(r"INSERT\s+OR\s+REPLACE\s+INTO\s+company\s+VALUES", text, flags=re.IGNORECASE):
+        text = (
+            'INSERT INTO company (key, value) VALUES (?, ?) '
+            'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value'
+        )
+
+    if re.search(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO", text, flags=re.IGNORECASE):
+        text = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", 'INSERT INTO', text, flags=re.IGNORECASE)
+        text = text.rstrip().rstrip(';')
+        if 'ON CONFLICT' not in text.upper():
+            text = f"{text} ON CONFLICT DO NOTHING"
+
+    text = text.replace("datetime('now')", 'CURRENT_TIMESTAMP')
+    text = text.replace('datetime("now")', 'CURRENT_TIMESTAMP')
+    text = text.replace('AUTOINCREMENT', '')
+    text = text.replace('?', '%s')
+    return text
+
+
+class PostgresCursorAdapter:
+    def __init__(self, raw_cursor):
+        self._raw_cursor = raw_cursor
+        self.lastrowid = None
+        self.rowcount = -1
+
+    def execute(self, query, params=None):
+        rewritten = _rewrite_sql_for_postgres(query)
+        if rewritten is None:
+            self.lastrowid = None
+            self.rowcount = 0
+            return self
+
+        self._raw_cursor.execute(rewritten, params or ())
+        self.rowcount = self._raw_cursor.rowcount
+        self.lastrowid = None
+
+        if rewritten.lstrip().upper().startswith('INSERT'):
+            try:
+                self._raw_cursor.execute('SELECT LASTVAL() AS lastrowid')
+                row = self._raw_cursor.fetchone()
+                if row:
+                    self.lastrowid = row.get('lastrowid') if isinstance(row, dict) else row[0]
+            except Exception:
+                self.lastrowid = None
+        return self
+
+    def fetchone(self):
+        return self._raw_cursor.fetchone()
+
+    def fetchall(self):
+        return self._raw_cursor.fetchall()
+
+    def close(self):
+        self._raw_cursor.close()
+
+
+class PostgresConnectionAdapter:
+    def __init__(self, raw_connection):
+        self._raw_connection = raw_connection
+        self.row_factory = None
+
+    def cursor(self):
+        return PostgresCursorAdapter(self._raw_connection.cursor(cursor_factory=RealDictCursor))
+
+    def execute(self, query, params=None):
+        return self.cursor().execute(query, params)
+
+    def commit(self):
+        self._raw_connection.commit()
+
+    def rollback(self):
+        self._raw_connection.rollback()
+
+    def close(self):
+        self._raw_connection.close()
+
+
+def _connect_postgres():
+    if not USE_POSTGRES:
+        raise RuntimeError('Postgres mode is not enabled.')
+    raw_connection = POSTGRES_ENGINE.raw_connection()
+    return PostgresConnectionAdapter(raw_connection)
+
+def _db_snapshot_object_url():
+    bucket_path = quote(str(DB_SNAPSHOT_BUCKET), safe='')
+    object_path = quote(str(DB_SNAPSHOT_KEY), safe='/')
+    return f"{SUPABASE_BASE_URL}/storage/v1/object/{bucket_path}/{object_path}"
+
+
+def _db_snapshot_auth_headers():
+    return {
+        'apikey': SUPABASE_SERVICE_KEY,
+        'Authorization': f'Bearer {SUPABASE_SERVICE_KEY}',
+    }
+
+
+def _restore_db_snapshot():
+    if not DB_SNAPSHOT_ENABLED:
+        return False
+
+    temp_path = f"{DB_PATH}.snapshot.download"
+    with _DB_SNAPSHOT_LOCK:
+        try:
+            response = requests.get(
+                _db_snapshot_object_url(),
+                headers=_db_snapshot_auth_headers(),
+                timeout=20,
+            )
+            body_text = (response.text or '').lower()
+            if response.status_code == 404:
+                return False
+            if response.status_code == 400 and (
+                'not_found' in body_text or 'object not found' in body_text
+            ):
+                return False
+            if response.status_code != 200:
+                app.logger.warning(
+                    'DB snapshot restore failed with status %s: %s',
+                    response.status_code,
+                    response.text,
+                )
+                return False
+            if not response.content:
+                return False
+
+            with open(temp_path, 'wb') as handle:
+                handle.write(response.content)
+            os.replace(temp_path, DB_PATH)
+            return True
+        except Exception as exc:
+            app.logger.warning('DB snapshot restore failed: %s', exc)
+            return False
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+
+def _persist_db_snapshot():
+    if not DB_SNAPSHOT_ENABLED or not os.path.exists(DB_PATH):
+        return False
+
+    with _DB_SNAPSHOT_LOCK:
+        try:
+            with open(DB_PATH, 'rb') as handle:
+                payload = handle.read()
+            if not payload:
+                return False
+
+            headers = {
+                **_db_snapshot_auth_headers(),
+                'Content-Type': 'application/octet-stream',
+                'x-upsert': 'true',
+            }
+            response = requests.post(
+                _db_snapshot_object_url(),
+                headers=headers,
+                data=payload,
+                timeout=20,
+            )
+            if response.status_code not in (200, 201):
+                app.logger.warning(
+                    'DB snapshot persist failed with status %s: %s',
+                    response.status_code,
+                    response.text,
+                )
+                return False
+            return True
+        except Exception as exc:
+            app.logger.warning('DB snapshot persist failed: %s', exc)
+            return False
+
+
+class SnapshotConnection(sqlite3.Connection):
+    def commit(self):
+        super().commit()
+        _persist_db_snapshot()
+
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    if USE_POSTGRES:
+        return _connect_postgres()
+
+    if DB_SNAPSHOT_ENABLED:
+        _restore_db_snapshot()
+
+    factory = SnapshotConnection if DB_SNAPSHOT_ENABLED else sqlite3.Connection
+    conn = sqlite3.connect(DB_PATH, factory=factory)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
+def _postgres_definition(definition, column_name):
+    updated = definition.replace("DEFAULT (datetime('now'))", 'DEFAULT CURRENT_TIMESTAMP')
+    updated = re.sub(r'\bREAL\b', 'DOUBLE PRECISION', updated)
+    if column_name in ('created_at', 'updated_at', 'last_attempt_at'):
+        updated = re.sub(r'^\s*TEXT\b', 'TIMESTAMP WITHOUT TIME ZONE', updated)
+    return updated
+
+
 def ensure_column(conn, table_name, column_name, definition):
+    if USE_POSTGRES:
+        cols = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema='public' AND table_name=%s
+            """,
+            (table_name,),
+        ).fetchall()
+        existing = {c['column_name'] for c in cols}
+        if column_name not in existing:
+            pg_definition = _postgres_definition(definition, column_name)
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {pg_definition}")
+            if column_name in ('created_at', 'updated_at'):
+                conn.execute(
+                    f"UPDATE {table_name} SET {column_name}=CURRENT_TIMESTAMP WHERE {column_name} IS NULL"
+                )
+        return
+
     cols = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     existing = {c['name'] for c in cols}
     if column_name not in existing:
@@ -207,10 +494,40 @@ def ensure_default_admin_user(conn):
         (username, password_hash),
     )
 
+
+def _init_postgres_schema(conn):
+    ORMBase.metadata.create_all(bind=POSTGRES_ENGINE)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS company (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS invoice_counters (
+            id SERIAL PRIMARY KEY,
+            company_id INTEGER NOT NULL DEFAULT 1,
+            year INTEGER NOT NULL,
+            next_no INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(company_id, year)
+        )
+        """
+    )
+
 def init_db():
     conn = get_db()
-    c = conn.cursor()
-    c.executescript('''
+    if USE_POSTGRES:
+        _init_postgres_schema(conn)
+        c = conn
+    else:
+        c = conn.cursor()
+        c.executescript('''
         CREATE TABLE IF NOT EXISTS company (key TEXT PRIMARY KEY, value TEXT);
 
         CREATE TABLE IF NOT EXISTS customers (
@@ -651,7 +968,7 @@ def get_customer_balance(conn, customer_id, company_id=1):
 
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'persistence_mode': DB_PERSISTENCE_MODE})
 
 
 @app.route('/api/auth/register', methods=['POST'])
@@ -797,7 +1114,15 @@ def update_company():
         )
         if company_id == 1:
             # Keep legacy table for backward compatibility with old exports.
-            conn.execute("INSERT OR REPLACE INTO company VALUES (?,?)", (k, str(v)))
+            conn.execute(
+                """
+                INSERT INTO company (key, value)
+                VALUES (?, ?)
+                ON CONFLICT (key)
+                DO UPDATE SET value = excluded.value
+                """,
+                (k, str(v)),
+            )
         if k == 'next_invoice_no':
             year = datetime.utcnow().year
             conn.execute(
@@ -1277,7 +1602,7 @@ def create_invoice():
     except ValueError as exc:
         conn.rollback()
         return jsonify({'error': str(exc)}), 400
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERRORS as exc:
         conn.rollback()
         msg = str(exc).lower()
         if 'unique' in msg and 'invoice' in msg:

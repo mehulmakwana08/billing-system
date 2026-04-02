@@ -138,13 +138,17 @@ DEFAULT_ADMIN_USERNAME=admin
 DEFAULT_ADMIN_PASSWORD_HASH=<bcrypt-hash>
 HOST=0.0.0.0
 PORT=5000
-BILLING_DB_PATH=/var/lib/arvind-billing/billing.db
+DATABASE_URL=postgresql://postgres:password@db-host:5432/billing
 BILLING_BILLS_DIR=/var/lib/arvind-billing/bills
 ```
 
 Notes:
-- `BILLING_DB_PATH` and `BILLING_BILLS_DIR` must point to persistent storage.
+- `DATABASE_URL` is required in cloud mode and on Vercel.
 - Use your domain, for example: `https://billing-api.yourdomain.com`.
+
+Vercel note:
+- Deploy with `DATABASE_URL` set to Postgres; runtime defaults to Postgres mode.
+- `/api/health` includes `persistence_mode` so deployments can be verified quickly (`postgres` expected).
 
 ### 2) Deploy Web App Against Same Backend
 
