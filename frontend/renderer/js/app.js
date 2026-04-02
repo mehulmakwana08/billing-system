@@ -291,6 +291,40 @@ async function refreshCompany() {
 }
 
 // ── PDF Open ──────────────────────────────────────────────────────────────────
+async function openInvoicePDFInBrowser(invoiceId, filename) {
+  const token = API.getToken()
+  const streamUrl = `${API.getBaseUrl()}/invoices/${invoiceId}/pdf`
+  const headers = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const response = await fetch(streamUrl, { headers })
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const errorPayload = await response.json()
+      message = errorPayload.error || errorPayload.message || message
+    } catch (_ignored) {
+      // Keep the status-based message when response body is not JSON.
+    }
+    throw new Error(message)
+  }
+
+  const blob = await response.blob()
+  const blobUrl = URL.createObjectURL(blob)
+  const opened = window.open(blobUrl, '_blank')
+
+  if (!opened) {
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = filename || `Invoice_${invoiceId}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
+}
+
 async function openInvoicePDF(invoiceId) {
   try {
     toast('Generating PDF…', 'info')
@@ -310,9 +344,7 @@ async function openInvoicePDF(invoiceId) {
       const result = await window.electronAPI.openPDF(target)
       if (!result.success) toast('Could not open PDF: ' + result.error, 'error')
     } else {
-      // Browser fallback
-      const streamUrl = `${API.getBaseUrl()}/invoices/${invoiceId}/pdf`
-      window.open(streamUrl, '_blank')
+      await openInvoicePDFInBrowser(invoiceId, data.filename)
     }
   } catch (e) {
     toast('PDF error: ' + e.message, 'error')

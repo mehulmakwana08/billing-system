@@ -337,6 +337,39 @@ def _storage_key_from_invoice(invoice):
     return f"invoices/{company_id}/{year}/{month}/{invoice_no}.pdf"
 
 
+def _is_writable_dir(path):
+    try:
+        os.makedirs(path, exist_ok=True)
+        fd, probe_path = tempfile.mkstemp(prefix=".pdf_write_probe_", dir=path)
+        os.close(fd)
+        os.remove(probe_path)
+        return True
+    except OSError:
+        return False
+
+
+def _local_bills_dir():
+    configured_dir = os.getenv("BILLING_BILLS_DIR")
+    fallback_dir = os.path.join(tempfile.gettempdir(), "bills")
+
+    candidates = []
+    if configured_dir:
+        candidates.append(configured_dir)
+    elif os.getenv("VERCEL"):
+        candidates.append(fallback_dir)
+    else:
+        candidates.append(os.path.join(os.path.dirname(__file__), "bills"))
+
+    if all(os.path.abspath(path) != os.path.abspath(fallback_dir) for path in candidates):
+        candidates.append(fallback_dir)
+
+    for candidate in candidates:
+        if _is_writable_dir(candidate):
+            return candidate
+
+    raise RuntimeError("No writable local bills directory found")
+
+
 def upload_to_supabase(file_path, key):
     """Upload a local file to Supabase Storage and return a URL."""
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -395,13 +428,11 @@ def generate_pdf(invoice, mode="local"):
     """
     Generate invoice PDF in local or cloud mode.
 
-    mode="local": stores under backend/bills and returns local file path.
+    mode="local": stores under BILLING_BILLS_DIR (or a writable temp path on serverless) and returns local file path.
     mode="cloud": writes temp file, uploads to Supabase, and returns cloud URL.
     """
     safe_no = _safe_invoice_no(invoice.get("invoice_no", "invoice"))
-    base_dir = os.path.dirname(__file__)
-    bills_dir = os.path.join(base_dir, "bills")
-    os.makedirs(bills_dir, exist_ok=True)
+    bills_dir = _local_bills_dir()
 
     if mode == "local":
         output_path = os.path.join(bills_dir, f"Invoice_{safe_no}.pdf")
