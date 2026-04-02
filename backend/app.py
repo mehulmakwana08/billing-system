@@ -227,8 +227,8 @@ def _rewrite_sql_for_postgres(query):
 
     text = text.replace("strftime('%Y-%m', i.date)", "substring(i.date from 1 for 7)")
     text = text.replace("strftime('%Y', i.date)", "substring(i.date from 1 for 4)")
-    text = text.replace("strftime('%Y-%m', date)", "substring(date from 1 for 7)")
-    text = text.replace("strftime('%Y', date)", "substring(date from 1 for 4)")
+    text = text.replace("strftime('%Y-%m', date)", "substring(\"date\" from 1 for 7)")
+    text = text.replace("strftime('%Y', date)", "substring(\"date\" from 1 for 4)")
     text = text.replace("date('now','-6 months')", "TO_CHAR(CURRENT_DATE - INTERVAL '6 months', 'YYYY-MM-DD')")
 
     text = text.replace("datetime('now')", 'CURRENT_TIMESTAMP')
