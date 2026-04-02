@@ -5,11 +5,28 @@ let _customers = []   // cached customer list
 let _products  = []   // cached product list
 let _company   = {}   // cached company settings
 let _authModal = null
-let _syncTimer = null
-let _syncInFlight = false
-let _syncEventsBound = false
-let _lastSyncAt = localStorage.getItem('last_sync_at') || ''
-let _lastSyncError = ''
+let _isAuthenticated = false
+
+function setAuthLocked(locked) {
+  const layout = document.querySelector('.layout')
+  const overlay = document.getElementById('auth-lock-overlay')
+  if (layout) layout.classList.toggle('auth-locked', locked)
+  if (overlay) {
+    overlay.classList.toggle('visible', locked)
+    overlay.setAttribute('aria-hidden', locked ? 'false' : 'true')
+  }
+}
+
+function activateShellPage(name = 'dashboard') {
+  document.querySelectorAll('.page').forEach((page) => page.classList.remove('active'))
+  document.querySelectorAll('.sidebar-nav a').forEach((link) => link.classList.remove('active'))
+
+  const page = document.getElementById(`page-${name}`)
+  if (page) page.classList.add('active')
+
+  const link = document.querySelector(`.sidebar-nav a[data-page="${name}"]`)
+  if (link) link.classList.add('active')
+}
 
 function setSyncStatus(text, tone = 'muted') {
   const el = document.getElementById('sync-status')
@@ -26,205 +43,16 @@ function setSyncStatus(text, tone = 'muted') {
   el.textContent = text
 }
 
-function formatSyncTime(ts) {
-  if (!ts) return ''
-  const dt = new Date(ts)
-  if (Number.isNaN(dt.getTime())) return ''
-  return dt.toLocaleString()
-}
-
-function canRunCloudSync() {
-  return API.isCloudEnabled() && API.isOnline() && !!API.getToken()
-}
-
 function refreshSyncStatus() {
-  if (_syncInFlight) {
-    setSyncStatus('Syncing...', 'info')
-    return
-  }
-  if (!API.isCloudEnabled()) {
-    setSyncStatus('Sync off', 'muted')
+  if (!_isAuthenticated || !API.getToken()) {
+    setSyncStatus('Sign in required', 'warning')
     return
   }
   if (!API.isOnline()) {
     setSyncStatus('Offline', 'warning')
     return
   }
-  if (!API.getToken()) {
-    setSyncStatus('Sign in to sync', 'warning')
-    return
-  }
-  if (_lastSyncError) {
-    setSyncStatus('Sync error', 'danger')
-    return
-  }
-  if (_lastSyncAt) {
-    setSyncStatus(`Last sync ${formatSyncTime(_lastSyncAt)}`, 'success')
-    return
-  }
-  setSyncStatus('Ready to sync', 'info')
-}
-
-function safeParseJson(value) {
-  if (typeof value !== 'string') return value || {}
-  try {
-    return JSON.parse(value)
-  } catch (_) {
-    return {}
-  }
-}
-
-async function markLocalQueueItems(queueItems, status, error = '') {
-  const message = String(error || '').slice(0, 500)
-  for (const item of queueItems) {
-    try {
-      await API.localPost(`/sync/queue/${item.id}`, { status, error: message })
-    } catch (_) {
-      // Ignore per-item mark failures; item stays in queue and will be retried.
-    }
-  }
-}
-
-function buildCloudPullChanges(payload) {
-  const changes = []
-  const invoices = Array.isArray(payload?.invoices) ? payload.invoices : []
-  const invoiceItems = Array.isArray(payload?.invoice_items) ? payload.invoice_items : []
-
-  const itemsByInvoice = new Map()
-  for (const item of invoiceItems) {
-    const list = itemsByInvoice.get(item.invoice_id) || []
-    list.push(item)
-    itemsByInvoice.set(item.invoice_id, list)
-  }
-
-  for (const row of Array.isArray(payload?.customers) ? payload.customers : []) {
-    changes.push({ entity: 'customer', action: 'update', payload: row })
-  }
-  for (const row of Array.isArray(payload?.products) ? payload.products : []) {
-    changes.push({ entity: 'product', action: 'update', payload: row })
-  }
-  for (const row of invoices) {
-    changes.push({
-      entity: 'invoice',
-      action: 'update',
-      payload: { ...row, items: itemsByInvoice.get(row.id) || row.items || [] },
-    })
-  }
-  for (const row of Array.isArray(payload?.payments) ? payload.payments : []) {
-    changes.push({ entity: 'payment', action: 'update', payload: row })
-  }
-
-  const ledgerRows = Array.isArray(payload?.ledger)
-    ? payload.ledger
-    : Array.isArray(payload?.customer_ledger)
-      ? payload.customer_ledger
-      : []
-  for (const row of ledgerRows) {
-    changes.push({ entity: 'ledger', action: 'update', payload: row })
-  }
-
-  return changes
-}
-
-function refreshActivePageAfterSync() {
-  const activePageId = document.querySelector('.page.active')?.id || ''
-  switch (activePageId) {
-    case 'page-dashboard':
-      loadDashboard()
-      break
-    case 'page-invoices':
-      loadInvoices()
-      break
-    case 'page-customers':
-      loadCustomers()
-      break
-    case 'page-products':
-      loadProducts()
-      break
-    case 'page-ledger':
-      loadLedger()
-      break
-    case 'page-reports':
-      initReports()
-      break
-    case 'page-new-invoice':
-      initNewInvoice()
-      break
-    default:
-      break
-  }
-}
-
-async function runSyncCycle({ force = false } = {}) {
-  if (_syncInFlight) return
-  if (!canRunCloudSync()) {
-    refreshSyncStatus()
-    return
-  }
-
-  _syncInFlight = true
-  _lastSyncError = ''
-  refreshSyncStatus()
-
-  try {
-    const queueProbeSince = encodeURIComponent(new Date().toISOString())
-    const localProbe = await API.localGet(`/sync/pull?since=${queueProbeSince}`)
-    const pendingQueue = Array.isArray(localProbe?.pending_queue) ? localProbe.pending_queue : []
-
-    if (pendingQueue.length > 0) {
-      const outboundChanges = pendingQueue.map((entry) => ({
-        entity: entry.entity,
-        action: entry.action,
-        payload: safeParseJson(entry.payload),
-      }))
-
-      try {
-        await API.cloudPost('/sync/push', { changes: outboundChanges })
-        await markLocalQueueItems(pendingQueue, 'synced', '')
-      } catch (pushErr) {
-        await markLocalQueueItems(pendingQueue, 'pending', pushErr.message || 'push_failed')
-        throw pushErr
-      }
-    }
-
-    const pullPath = _lastSyncAt
-      ? `/sync/pull?since=${encodeURIComponent(_lastSyncAt)}`
-      : '/sync/pull'
-    const cloudPayload = await API.cloudGet(pullPath)
-    const inboundChanges = buildCloudPullChanges(cloudPayload)
-
-    if (inboundChanges.length > 0) {
-      await API.localPost('/sync/push', { changes: inboundChanges })
-      await Promise.all([refreshCustomers(), refreshProducts()])
-      refreshActivePageAfterSync()
-    }
-
-    _lastSyncAt = cloudPayload?.server_time || new Date().toISOString()
-    localStorage.setItem('last_sync_at', _lastSyncAt)
-    _lastSyncError = ''
-  } catch (err) {
-    _lastSyncError = err.message || 'sync_failed'
-    if (force) {
-      console.warn('Sync cycle failed:', _lastSyncError)
-    }
-  } finally {
-    _syncInFlight = false
-    refreshSyncStatus()
-  }
-}
-
-function startSyncLoop() {
-  if (_syncTimer) clearInterval(_syncTimer)
-  _syncTimer = setInterval(() => {
-    runSyncCycle()
-  }, 30000)
-
-  if (!_syncEventsBound) {
-    window.addEventListener('online', () => runSyncCycle({ force: true }))
-    window.addEventListener('offline', refreshSyncStatus)
-    _syncEventsBound = true
-  }
-  refreshSyncStatus()
+  setSyncStatus('Connected', 'success')
 }
 
 function refreshAuthUI(user) {
@@ -232,12 +60,17 @@ function refreshAuthUI(user) {
   const openBtn = document.getElementById('auth-open-btn')
   const logoutBtn = document.getElementById('auth-logout-btn')
   if (!user) {
-    userEl.textContent = API.isCloudEnabled() ? 'Cloud: not signed in' : 'Offline mode'
+    _isAuthenticated = false
+    setAuthLocked(true)
+    activateShellPage('dashboard')
+    userEl.textContent = 'Not signed in'
     openBtn.classList.remove('d-none')
     logoutBtn.classList.add('d-none')
     refreshSyncStatus()
     return
   }
+  _isAuthenticated = true
+  setAuthLocked(false)
   const displayName = user.username || user.email || 'User'
   userEl.textContent = `${displayName} (Company ${user.company_id})`
   openBtn.classList.add('d-none')
@@ -247,7 +80,10 @@ function refreshAuthUI(user) {
 
 function getAuthModal() {
   if (!_authModal) {
-    _authModal = new bootstrap.Modal(document.getElementById('authModal'))
+    _authModal = new bootstrap.Modal(document.getElementById('authModal'), {
+      backdrop: 'static',
+      keyboard: false,
+    })
   }
   return _authModal
 }
@@ -255,15 +91,23 @@ function getAuthModal() {
 async function syncAuthState() {
   if (!API.getToken()) {
     refreshAuthUI(null)
-    return
+    return null
   }
   try {
     const me = await API.get('/auth/me')
     refreshAuthUI(me)
+    return me
   } catch (_) {
     API.clearToken()
     refreshAuthUI(null)
+    return null
   }
+}
+
+async function initializeAuthorizedSession() {
+  await refreshCompany()
+  await Promise.all([refreshCustomers(), refreshProducts()])
+  showPage('dashboard')
 }
 
 async function authLogin() {
@@ -278,61 +122,30 @@ async function authLogin() {
     API.setToken(res.token)
     refreshAuthUI(res.user)
     getAuthModal().hide()
-    runSyncCycle({ force: true })
+    await initializeAuthorizedSession()
     toast('Signed in', 'success')
   } catch (err) {
     toast('Login failed: ' + err.message, 'error')
   }
 }
 
-async function authRegister() {
-  const email = document.getElementById('register-email').value.trim()
-  const password = document.getElementById('register-password').value
-  const company_id = parseInt(document.getElementById('register-company-id').value || '1', 10)
-  if (!email || !password) {
-    toast('Enter email and password', 'error')
-    return
-  }
-  try {
-    const res = await API.post('/auth/register', { email, password, company_id })
-    API.setToken(res.token)
-    refreshAuthUI(res.user)
-    getAuthModal().hide()
-    runSyncCycle({ force: true })
-    toast('Account created', 'success')
-  } catch (err) {
-    toast('Register failed: ' + err.message, 'error')
-  }
-}
-
 function bindAuthControls() {
-  const cloudBase = document.getElementById('cloud-api-base')
-  const cloudEnabled = document.getElementById('cloud-enabled')
-
-  cloudBase.value = API.getCloudBase()
-  cloudEnabled.checked = API.isCloudEnabled()
-
-  cloudBase.addEventListener('change', () => {
-    API.setCloudBase(cloudBase.value)
-    toast('Cloud API base updated', 'success')
-  })
-  cloudEnabled.addEventListener('change', () => {
-    API.setCloudEnabled(cloudEnabled.checked)
-    syncAuthState()
-    refreshSyncStatus()
-    if (cloudEnabled.checked) runSyncCycle({ force: true })
-  })
-
   document.getElementById('auth-open-btn').addEventListener('click', () => getAuthModal().show())
+  document.getElementById('auth-lock-signin-btn')?.addEventListener('click', () => getAuthModal().show())
   document.getElementById('auth-logout-btn').addEventListener('click', () => {
     API.clearToken()
     refreshAuthUI(null)
-    _lastSyncError = ''
-    refreshSyncStatus()
+    getAuthModal().show()
     toast('Signed out', 'info')
   })
-  document.getElementById('login-btn').addEventListener('click', authLogin)
-  document.getElementById('register-btn').addEventListener('click', authRegister)
+  const loginForm = document.getElementById('login-form')
+
+  if (loginForm) {
+    loginForm.addEventListener('submit', (event) => {
+      event.preventDefault()
+      authLogin()
+    })
+  }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -348,6 +161,16 @@ const PAGE_TITLES = {
 }
 
 function showPage(name) {
+  if (!_isAuthenticated || !API.getToken()) {
+    setAuthLocked(true)
+    document.getElementById('page-title').textContent = 'Sign In Required'
+    getAuthModal().show()
+    if (name !== 'dashboard') {
+      toast('Please sign in first', 'warning')
+    }
+    return
+  }
+
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
   document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'))
 
@@ -497,12 +320,31 @@ async function openInvoicePDF(invoiceId) {
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', async () => {
+let _appBootstrapped = false
+
+async function bootstrapApp() {
+  if (_appBootstrapped) return
+  _appBootstrapped = true
+
   bindAuthControls()
-  startSyncLoop()
-  await syncAuthState()
-  await refreshCompany()
-  await Promise.all([refreshCustomers(), refreshProducts()])
-  runSyncCycle({ force: true })
-  showPage('dashboard')
-})
+  const me = await syncAuthState()
+  if (!me) {
+    setAuthLocked(true)
+    getAuthModal().show()
+    return
+  }
+
+  await initializeAuthorizedSession()
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    bootstrapApp().catch((err) => {
+      console.error('App bootstrap failed:', err)
+    })
+  }, { once: true })
+} else {
+  bootstrapApp().catch((err) => {
+    console.error('App bootstrap failed:', err)
+  })
+}

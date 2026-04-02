@@ -1,21 +1,58 @@
 from flask import Flask, request, jsonify, send_file, send_from_directory, g
-import sqlite3, os, json
+import sqlite3, os, json, re
 from datetime import datetime, date
 from dotenv import load_dotenv
 from auth import AuthError, hash_password, issue_token, load_auth_context, require_auth, verify_password
 from pdf_generator import generate_invoice_pdf, generate_pdf
 from num_words import num_to_words
-from sync_service import apply_push_payload, build_pull_payload, enqueue_sync, list_pending_sync, mark_sync_status
+from sync_service import enqueue_sync
 
 app = Flask(__name__)
 
 load_dotenv()
 
 APP_MODE = os.getenv('APP_MODE', 'offline').lower()  # offline | cloud
-AUTH_REQUIRED = os.getenv('AUTH_REQUIRED', '0') == '1' or APP_MODE == 'cloud'
-PUBLIC_PATHS = {'/api/health', '/api/auth/register', '/api/auth/login'}
+CLOUD_ONLY_MODE = os.getenv('CLOUD_ONLY_MODE', '1') == '1'
+LOGIN_ONLY_MODE = os.getenv('LOGIN_ONLY_MODE', '1') == '1'
+ALLOW_SELF_REGISTER = (os.getenv('ALLOW_SELF_REGISTER', '0') == '1') and not LOGIN_ONLY_MODE
+AUTH_REQUIRED = CLOUD_ONLY_MODE or os.getenv('AUTH_REQUIRED', '0') == '1' or APP_MODE == 'cloud'
+PUBLIC_PATHS = {'/api/health', '/api/auth/login', '/api/auth/register'}
 DEFAULT_ADMIN_USERNAME = (os.getenv('DEFAULT_ADMIN_USERNAME', 'admin') or 'admin').strip().lower()
 DEFAULT_ADMIN_PASSWORD_HASH = (os.getenv('DEFAULT_ADMIN_PASSWORD_HASH') or '').strip()
+DEFAULT_ADMIN_PASSWORD = (os.getenv('DEFAULT_ADMIN_PASSWORD') or '').strip()
+DEFAULT_CORS_ALLOWED_ORIGINS = {
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5000',
+    'http://127.0.0.1:5000',
+    'null',
+}
+
+
+def _load_allowed_cors_origins():
+    configured = os.getenv('CORS_ALLOWED_ORIGINS', '')
+    values = {origin.strip() for origin in configured.split(',') if origin.strip()}
+    return values or DEFAULT_CORS_ALLOWED_ORIGINS
+
+
+CORS_ALLOWED_ORIGINS = _load_allowed_cors_origins()
+ALLOWED_COMPANY_SETTING_KEYS = {
+    'name',
+    'address',
+    'gstin',
+    'state_code',
+    'state_name',
+    'phone',
+    'email',
+    'invoice_prefix',
+    'next_invoice_no',
+    'terms',
+    'bank_name',
+    'bank_account',
+    'bank_ifsc',
+    'bank_branch',
+}
+PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
 
 
 def current_company_id():
@@ -38,7 +75,10 @@ def attach_auth_context():
 
 @app.after_request
 def add_cors(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    origin = (request.headers.get('Origin') or '').strip()
+    if origin and origin in CORS_ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Vary'] = 'Origin'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
     response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
     return response
@@ -83,14 +123,20 @@ def serve_web(path):
     return jsonify({'status': 'ok', 'message': 'Billing backend is running.'}), 200
 
 if os.getenv('VERCEL'):
-    DB_PATH = '/tmp/billing.db'
-    BILLS_DIR = '/tmp/bills'
+    default_db_path = '/tmp/billing.db'
+    default_bills_dir = '/tmp/bills'
 else:
-    DB_PATH = os.path.join(os.path.dirname(__file__), 'billing.db')
-    BILLS_DIR = os.path.join(os.path.dirname(__file__), 'bills')
+    default_db_path = os.path.join(os.path.dirname(__file__), 'billing.db')
+    default_bills_dir = os.path.join(os.path.dirname(__file__), 'bills')
+
+DB_PATH = os.getenv('BILLING_DB_PATH') or default_db_path
+BILLS_DIR = os.getenv('BILLING_BILLS_DIR') or default_bills_dir
 FRONTEND_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'frontend', 'renderer')
 )
+db_dir = os.path.dirname(DB_PATH)
+if db_dir:
+    os.makedirs(db_dir, exist_ok=True)
 os.makedirs(BILLS_DIR, exist_ok=True)
 
 # ── DB Helpers ────────────────────────────────────────────────────────────────
@@ -135,6 +181,8 @@ def _migrate_company_to_company_settings(conn):
 def ensure_default_admin_user(conn):
     username = DEFAULT_ADMIN_USERNAME
     password_hash = DEFAULT_ADMIN_PASSWORD_HASH
+    if not password_hash and DEFAULT_ADMIN_PASSWORD:
+        password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
     if not username or not password_hash:
         return
 
@@ -188,7 +236,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            invoice_no TEXT UNIQUE NOT NULL,
+            invoice_no TEXT NOT NULL,
             invoice_type TEXT DEFAULT 'TAX INVOICE',
             date TEXT NOT NULL,
             customer_id INTEGER,
@@ -289,6 +337,16 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS invoice_counters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL DEFAULT 1,
+            year INTEGER NOT NULL,
+            next_no INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(company_id, year)
+        );
     ''')
 
     # Backward-compatible schema upgrades for hybrid/cloud mode.
@@ -355,6 +413,21 @@ def init_db():
     c.execute(
         "CREATE INDEX IF NOT EXISTS idx_users_company_email ON users(company_id, email)"
     )
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_counters_company_year ON invoice_counters(company_id, year)"
+    )
+
+    try:
+        seed_next = int(defaults.get('next_invoice_no', '1') or 1)
+    except Exception:
+        seed_next = 1
+    c.execute(
+        """
+        INSERT OR IGNORE INTO invoice_counters (company_id, year, next_no, created_at, updated_at)
+        VALUES (1, ?, ?, datetime('now'), datetime('now'))
+        """,
+        (datetime.utcnow().year, seed_next),
+    )
 
     ensure_default_admin_user(conn)
 
@@ -382,25 +455,165 @@ def calc_gst(taxable, gst_pct, seller_state, buyer_state):
     else:
         return 0.0, 0.0, tax
 
-def advance_invoice_no(conn, invoice_no, company_id=1):
+
+def normalize_invoice_prefix(prefix):
+    value = (prefix or 'GT/').strip()
+    if not value:
+        value = 'GT/'
+    return value if value.endswith('/') else f"{value}/"
+
+
+def extract_invoice_counter(invoice_no):
     try:
-        num = int(str(invoice_no).split('/')[-1]) + 1
-        conn.execute(
-            """
-            INSERT INTO company_settings (company_id, key, value, created_at, updated_at)
-            VALUES (?, 'next_invoice_no', ?, datetime('now'), datetime('now'))
-            ON CONFLICT(company_id, key)
-            DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-            """,
-            (company_id, str(num)),
-        )
+        return int(str(invoice_no).split('/')[-1])
     except Exception:
-        pass
+        return None
 
 
-def format_invoice_number(invoice_counter):
+def format_invoice_number(invoice_counter, prefix='GT/', year=None):
+    invoice_year = int(year or datetime.utcnow().year)
+    return f"{normalize_invoice_prefix(prefix)}{invoice_year}/{int(invoice_counter):05d}"
+
+
+def get_invoice_number_preview(conn, company_id=1):
+    co = get_company_dict(conn, company_id)
     year = datetime.utcnow().year
-    return f"GT/{year}/{int(invoice_counter):05d}"
+    prefix = normalize_invoice_prefix(co.get('invoice_prefix', 'GT/'))
+    row = conn.execute(
+        "SELECT next_no FROM invoice_counters WHERE company_id=? AND year=?",
+        (company_id, year),
+    ).fetchone()
+    if row and row['next_no'] is not None:
+        next_no = int(row['next_no'])
+    else:
+        try:
+            next_no = int(co.get('next_invoice_no', '1') or 1)
+        except Exception:
+            next_no = 1
+    return format_invoice_number(next_no, prefix, year), next_no, prefix
+
+
+def reserve_invoice_number(conn, company_id=1, company_settings=None):
+    co = company_settings or get_company_dict(conn, company_id)
+    year = datetime.utcnow().year
+    prefix = normalize_invoice_prefix(co.get('invoice_prefix', 'GT/'))
+    try:
+        fallback_next = int(co.get('next_invoice_no', '1') or 1)
+    except Exception:
+        fallback_next = 1
+
+    conn.execute(
+        """
+        INSERT INTO invoice_counters (company_id, year, next_no, created_at, updated_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(company_id, year) DO NOTHING
+        """,
+        (company_id, year, fallback_next),
+    )
+    row = conn.execute(
+        "SELECT next_no FROM invoice_counters WHERE company_id=? AND year=?",
+        (company_id, year),
+    ).fetchone()
+    next_no = int(row['next_no']) if row and row['next_no'] is not None else fallback_next
+    conn.execute(
+        """
+        UPDATE invoice_counters
+        SET next_no=?, updated_at=datetime('now')
+        WHERE company_id=? AND year=?
+        """,
+        (next_no + 1, company_id, year),
+    )
+    conn.execute(
+        """
+        INSERT INTO company_settings (company_id, key, value, created_at, updated_at)
+        VALUES (?, 'next_invoice_no', ?, datetime('now'), datetime('now'))
+        ON CONFLICT(company_id, key)
+        DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+        """,
+        (company_id, str(next_no + 1)),
+    )
+    return format_invoice_number(next_no, prefix, year), next_no
+
+def advance_invoice_no(conn, invoice_no, company_id=1):
+    counter = extract_invoice_counter(invoice_no)
+    if counter is None:
+        return
+
+    next_no = counter + 1
+    year = datetime.utcnow().year
+    conn.execute(
+        """
+        INSERT INTO invoice_counters (company_id, year, next_no, created_at, updated_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(company_id, year)
+        DO UPDATE SET
+            next_no = CASE
+                WHEN invoice_counters.next_no < excluded.next_no THEN excluded.next_no
+                ELSE invoice_counters.next_no
+            END,
+            updated_at = datetime('now')
+        """,
+        (company_id, year, next_no),
+    )
+    conn.execute(
+        """
+        INSERT INTO company_settings (company_id, key, value, created_at, updated_at)
+        VALUES (?, 'next_invoice_no', ?, datetime('now'), datetime('now'))
+        ON CONFLICT(company_id, key)
+        DO UPDATE SET
+            value = CASE
+                WHEN CAST(company_settings.value AS INTEGER) < CAST(excluded.value AS INTEGER)
+                    THEN excluded.value
+                ELSE company_settings.value
+            END,
+            updated_at = datetime('now')
+        """,
+        (company_id, str(next_no)),
+    )
+
+
+def to_float(value, field_name):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{field_name} must be a valid number')
+
+
+def validate_password_strength(password):
+    if len(password) < PASSWORD_MIN_LENGTH:
+        return f'password must be at least {PASSWORD_MIN_LENGTH} characters'
+    if not re.search(r'[A-Z]', password):
+        return 'password must include at least one uppercase letter'
+    if not re.search(r'[a-z]', password):
+        return 'password must include at least one lowercase letter'
+    if not re.search(r'\d', password):
+        return 'password must include at least one digit'
+    if not re.search(r'[^A-Za-z0-9]', password):
+        return 'password must include at least one special character'
+    return None
+
+
+def parse_iso_date_param(value, field_name):
+    text = (value or '').strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, '%Y-%m-%d').date()
+    except ValueError as exc:
+        raise ValueError(f'{field_name} must be in YYYY-MM-DD format') from exc
+
+
+def parse_period_month_param(value):
+    text = (value or '').strip()
+    if re.fullmatch(r'\d{4}', text):
+        return text
+    if re.fullmatch(r'\d{4}-\d{2}', text):
+        try:
+            datetime.strptime(text, '%Y-%m')
+            return text
+        except ValueError as exc:
+            raise ValueError('month must be in YYYY-MM format') from exc
+    raise ValueError('month must be in YYYY-MM format or YYYY')
 
 # ── Ledger Helpers ────────────────────────────────────────────────────────────
 
@@ -443,15 +656,22 @@ def health():
 
 @app.route('/api/auth/register', methods=['POST'])
 def auth_register():
+    if not ALLOW_SELF_REGISTER:
+        return jsonify({'error': 'self registration is disabled'}), 403
+
     data = request.json or {}
     email = (data.get('email') or '').strip().lower()
     password = data.get('password') or ''
-    company_id = int(data.get('company_id') or 1)
+    try:
+        company_id = int(data.get('company_id') or 1)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'company_id must be a valid integer'}), 400
 
     if not email or not password:
         return jsonify({'error': 'email and password are required'}), 400
-    if len(password) < 8:
-        return jsonify({'error': 'password must be at least 8 characters'}), 400
+    password_error = validate_password_strength(password)
+    if password_error:
+        return jsonify({'error': password_error}), 400
 
     conn = get_db()
     exists = conn.execute('SELECT id FROM users WHERE email=?', (email,)).fetchone()
@@ -467,11 +687,17 @@ def auth_register():
         """,
         (email, password_hash, company_id),
     )
+    user_id = cur.lastrowid
+    if user_id is None:
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'failed to create user'}), 500
+
     conn.commit()
 
-    token = issue_token(cur.lastrowid, company_id, email)
+    token = issue_token(int(user_id), company_id, email)
     conn.close()
-    return jsonify({'token': token, 'user': {'id': cur.lastrowid, 'email': email, 'company_id': company_id}}), 201
+    return jsonify({'token': token, 'user': {'id': int(user_id), 'email': email, 'company_id': company_id}}), 201
 
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -534,8 +760,32 @@ def get_company():
 def update_company():
     company_id = current_company_id()
     data = request.json or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'company settings payload must be an object'}), 400
+
+    unknown_keys = sorted([k for k in data.keys() if k not in ALLOWED_COMPANY_SETTING_KEYS])
+    if unknown_keys:
+        return jsonify({'error': f'unsupported company setting keys: {", ".join(unknown_keys)}'}), 400
+
+    normalized = {}
+    for key, value in data.items():
+        text = str(value if value is not None else '').strip()
+        if key == 'state_code' and text and not re.fullmatch(r'\d{2}', text):
+            return jsonify({'error': 'state_code must be a 2-digit code'}), 400
+        if key == 'next_invoice_no':
+            try:
+                next_no = int(text)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'next_invoice_no must be a positive integer'}), 400
+            if next_no < 1:
+                return jsonify({'error': 'next_invoice_no must be a positive integer'}), 400
+            text = str(next_no)
+        if key == 'invoice_prefix':
+            text = normalize_invoice_prefix(text)
+        normalized[key] = text
+
     conn = get_db()
-    for k, v in data.items():
+    for k, v in normalized.items():
         conn.execute(
             """
             INSERT INTO company_settings (company_id, key, value, created_at, updated_at)
@@ -548,6 +798,17 @@ def update_company():
         if company_id == 1:
             # Keep legacy table for backward compatibility with old exports.
             conn.execute("INSERT OR REPLACE INTO company VALUES (?,?)", (k, str(v)))
+        if k == 'next_invoice_no':
+            year = datetime.utcnow().year
+            conn.execute(
+                """
+                INSERT INTO invoice_counters (company_id, year, next_no, created_at, updated_at)
+                VALUES (?, ?, ?, datetime('now'), datetime('now'))
+                ON CONFLICT(company_id, year)
+                DO UPDATE SET next_no = excluded.next_no, updated_at = datetime('now')
+                """,
+                (company_id, year, int(v)),
+            )
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -635,6 +896,7 @@ def update_customer(cid):
 
 @app.route('/api/customers/<int:cid>', methods=['DELETE'])
 def delete_customer(cid):
+    conn = None
     try:
         company_id = current_company_id()
         conn = get_db()
@@ -648,12 +910,15 @@ def delete_customer(cid):
         if APP_MODE != 'cloud':
             enqueue_sync(conn, company_id, 'customer', 'delete', {'id': cid})
         conn.commit()
-        conn.close()
         return jsonify({'success': True})
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': 'Database error: ' + str(e)}), 500
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        app.logger.exception('Failed to delete customer %s', cid)
+        return jsonify({'error': 'Database error: ' + str(exc)}), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 # ── Products ──────────────────────────────────────────────────────────────────
@@ -732,6 +997,7 @@ def update_product(pid):
 
 @app.route('/api/products/<int:pid>', methods=['DELETE'])
 def delete_product(pid):
+    conn = None
     try:
         company_id = current_company_id()
         conn = get_db()
@@ -750,12 +1016,15 @@ def delete_product(pid):
         if APP_MODE != 'cloud':
             enqueue_sync(conn, company_id, 'product', 'delete', {'id': pid})
         conn.commit()
-        conn.close()
         return jsonify({'success': True})
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': 'Database error: ' + str(e)}), 500
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        app.logger.exception('Failed to delete product %s', pid)
+        return jsonify({'error': 'Database error: ' + str(exc)}), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 # ── Invoices ──────────────────────────────────────────────────────────────────
@@ -764,27 +1033,33 @@ def delete_product(pid):
 def next_invoice_number():
     company_id = current_company_id()
     conn = get_db()
-    co = get_company_dict(conn, company_id)
+    invoice_no, _, _ = get_invoice_number_preview(conn, company_id)
     conn.close()
-    next_no = int(co.get('next_invoice_no', '1') or 1)
-    return jsonify({'invoice_no': format_invoice_number(next_no)})
+    return jsonify({'invoice_no': invoice_no})
 
 @app.route('/api/invoices', methods=['GET'])
 def list_invoices():
     company_id = current_company_id()
+    try:
+        sd = parse_iso_date_param(request.args.get('start_date'), 'start_date')
+        ed = parse_iso_date_param(request.args.get('end_date'), 'end_date')
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    if sd and ed and sd > ed:
+        return jsonify({'error': 'start_date must be less than or equal to end_date'}), 400
+
     conn = get_db()
     q = "SELECT * FROM invoices WHERE company_id=?"
-    params = [company_id]
+    params = [company_id]  # type: list[object]
     s = request.args.get('search','').strip()
     if s:
         q += " AND (invoice_no LIKE ? OR customer_name LIKE ?)"
         params += [f'%{s}%', f'%{s}%']
-    sd = request.args.get('start_date')
-    ed = request.args.get('end_date')
     if sd:
-        q += " AND date >= ?"; params.append(sd)
+        q += " AND date >= ?"; params.append(sd.isoformat())
     if ed:
-        q += " AND date <= ?"; params.append(ed)
+        q += " AND date <= ?"; params.append(ed.isoformat())
     q += " ORDER BY date DESC, id DESC"
     rows = conn.execute(q, params).fetchall()
     conn.close()
@@ -795,152 +1070,227 @@ def create_invoice():
     company_id = current_company_id()
     d = request.json or {}
     conn = get_db()
-    co = get_company_dict(conn, company_id)
-    items = d.get('items', [])
-    seller_state = co.get('state_code', '24')
-    buyer_state = d.get('customer_state_code', '24')
-
-    # Auto-generate invoice_no if not provided
-    invoice_no = d.get('invoice_no')
-    if not invoice_no:
-        next_no = int(co.get('next_invoice_no', '1') or 1)
-        invoice_no = format_invoice_number(next_no)
-
-    # Support both 'date' and 'invoice_date' field names
-    inv_date = d.get('date') or d.get('invoice_date')
-    if not inv_date:
-        conn.close()
-        return jsonify({'error': 'date is required'}), 400
-
-    # Auto-fill customer info from DB if only customer_id provided
-    customer_name = d.get('customer_name')
-    customer_address = d.get('customer_address')
-    customer_gstin = d.get('customer_gstin')
-    if d.get('customer_id') and not customer_name:
-        cust = conn.execute(
-            "SELECT * FROM customers WHERE id=? AND company_id=?",
-            (d['customer_id'], company_id),
-        ).fetchone()
-        if cust:
-            cust = dict(cust)
-            customer_name = cust['name']
-            customer_address = cust.get('address', '')
-            customer_gstin = cust.get('gstin', '')
-            buyer_state = cust.get('state_code', '24')
-
-    # Recalculate to ensure accuracy
-    total_taxable = total_cgst = total_sgst = total_igst = 0.0
-    clean_items = []
-    for item in items:
-        qty = float(item.get('qty', 1))
-        rate = float(item.get('rate', 0))
-        gst_pct = float(item.get('gst_percent', 18))
-        taxable = round(qty * rate, 2)
-        cgst, sgst, igst = calc_gst(taxable, gst_pct, seller_state, buyer_state)
-        total_taxable += taxable
-        total_cgst += cgst
-        total_sgst += sgst
-        total_igst += igst
-        clean_items.append({**item, 'taxable_amount': taxable, 'cgst': cgst, 'sgst': sgst, 'igst': igst})
-
-    grand_total = round(total_taxable + total_cgst + total_sgst + total_igst, 2)
-    place_of_supply = f"{buyer_state}-{d.get('customer_state_name', 'Gujarat')}"
-
-    cur = conn.execute("""
-                INSERT INTO invoices (company_id,invoice_no,invoice_type,date,customer_id,customer_name,
-          customer_address,customer_gstin,customer_state_code,place_of_supply,
-                    taxable_amount,cgst,sgst,igst,grand_total,status,notes,pdf_url,sync_status,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-        """, (company_id, invoice_no, d.get('invoice_type','TAX INVOICE'), inv_date,
-          d.get('customer_id'), customer_name, customer_address,
-          customer_gstin, buyer_state, place_of_supply,
-          round(total_taxable,2), round(total_cgst,2), round(total_sgst,2), round(total_igst,2),
-                    grand_total, d.get('status','final'), d.get('notes',''), '', 'pending'))
-    iid = cur.lastrowid
-
-    for item in clean_items:
-        conn.execute("""
-            INSERT INTO invoice_items (invoice_id,product_id,product_name,hsn_code,
-                            qty,rate,taxable_amount,gst_percent,cgst,sgst,igst,created_at,updated_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))
-        """, (iid, item.get('product_id'), item.get('product_name'), item.get('hsn_code'),
-              float(item.get('qty',1)), float(item.get('rate',0)),
-              item['taxable_amount'], float(item.get('gst_percent',18)),
-              item['cgst'], item['sgst'], item['igst']))
-
-    advance_invoice_no(conn, invoice_no, company_id)
-
-    # ── Ledger integration ──
-    credit_applied = 0.0
-    remaining_due = grand_total
-    if d.get('customer_id'):
-        cid = d['customer_id']
-        # Check available credit BEFORE adding the debit
-        bal_info = get_customer_balance(conn, cid, company_id)
-        available_credit = max(bal_info['balance'], 0)
-        # Add debit entry for the invoice
-        add_ledger_entry(conn, cid, 'debit', grand_total,
-                         f'Invoice #{invoice_no}', str(iid), company_id)
-        # Calculate how much credit is auto-applied
-        if available_credit > 0:
-            credit_applied = round(min(available_credit, grand_total), 2)
-            remaining_due = round(grand_total - credit_applied, 2)
-
-    conn.commit()
-    invoice = conn.execute(
-        "SELECT * FROM invoices WHERE id=? AND company_id=?",
-        (iid, company_id),
-    ).fetchone()
-    items_rows = conn.execute("SELECT * FROM invoice_items WHERE invoice_id=?", (iid,)).fetchall()
-
-    # Build invoice payload for PDF generation.
-    inv_data = dict(invoice)
-    inv_data['company_id'] = company_id
-    inv_data['items'] = [dict(i) for i in items_rows]
-    inv_data['company'] = co
-    inv_data['amount_words'] = num_to_words(round(inv_data['grand_total']))
-    total_gst = inv_data['cgst'] + inv_data['sgst'] + inv_data['igst']
-    inv_data['gst_words'] = num_to_words(round(total_gst))
-
-    pdf_url = ''
-    sync_status = 'pending'
     try:
-        if APP_MODE == 'cloud':
-            pdf_url = generate_pdf(inv_data, mode='cloud')
-            sync_status = 'synced'
+        conn.execute("BEGIN IMMEDIATE")
+        co = get_company_dict(conn, company_id)
+        items = d.get('items', [])
+        if not isinstance(items, list) or len(items) == 0:
+            raise ValueError('at least one invoice item is required')
+
+        seller_state = str(co.get('state_code', '24') or '24')
+        buyer_state = str(d.get('customer_state_code', '24') or '24')
+
+        invoice_no = (d.get('invoice_no') or '').strip()
+        auto_generated_number = not invoice_no
+        if auto_generated_number:
+            invoice_no, _ = reserve_invoice_number(conn, company_id, co)
+
+        inv_date = (d.get('date') or d.get('invoice_date') or '').strip()
+        if not inv_date:
+            raise ValueError('date is required')
+
+        customer_id = d.get('customer_id')
+        if customer_id in ('', None):
+            customer_id = None
         else:
-            pdf_url = generate_pdf(inv_data, mode='local')
-            sync_status = 'pending'
-    except Exception:
-        pdf_url = ''
-        sync_status = 'pending'
+            try:
+                customer_id = int(customer_id)
+            except (TypeError, ValueError):
+                raise ValueError('customer_id must be a valid integer')
 
-    conn.execute(
-        """
-        UPDATE invoices
-        SET pdf_url=?, sync_status=?, updated_at=datetime('now')
-        WHERE id=? AND company_id=?
-        """,
-        (pdf_url, sync_status, iid, company_id),
-    )
+        customer_name = d.get('customer_name')
+        customer_address = d.get('customer_address')
+        customer_gstin = d.get('customer_gstin')
+        if customer_id:
+            cust = conn.execute(
+                "SELECT * FROM customers WHERE id=? AND company_id=?",
+                (customer_id, company_id),
+            ).fetchone()
+            if not cust:
+                raise ValueError('customer_id does not exist for this company')
+            cust = dict(cust)
+            if not customer_name:
+                customer_name = cust['name']
+            if not customer_address:
+                customer_address = cust.get('address', '')
+            if not customer_gstin:
+                customer_gstin = cust.get('gstin', '')
+            buyer_state = str(cust.get('state_code', buyer_state) or buyer_state)
 
-    conn.commit()
-    invoice = conn.execute(
-        "SELECT * FROM invoices WHERE id=? AND company_id=?",
-        (iid, company_id),
-    ).fetchone()
-    items_rows = conn.execute("SELECT * FROM invoice_items WHERE invoice_id=?", (iid,)).fetchall()
-    if APP_MODE != 'cloud':
-        invoice_payload = dict(invoice)
-        invoice_payload['items'] = [dict(i) for i in items_rows]
-        enqueue_sync(conn, company_id, 'invoice', 'create', invoice_payload)
+        if not customer_name:
+            raise ValueError('customer_name is required')
+
+        total_taxable = total_cgst = total_sgst = total_igst = 0.0
+        clean_items = []
+        for idx, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f'items[{idx}] must be an object')
+
+            qty = to_float(item.get('qty', 1), f'items[{idx}].qty')
+            rate = to_float(item.get('rate', 0), f'items[{idx}].rate')
+            gst_pct = to_float(item.get('gst_percent', 18), f'items[{idx}].gst_percent')
+
+            if qty <= 0:
+                raise ValueError(f'items[{idx}].qty must be greater than 0')
+            if rate < 0:
+                raise ValueError(f'items[{idx}].rate must be non-negative')
+            if gst_pct < 0 or gst_pct > 100:
+                raise ValueError(f'items[{idx}].gst_percent must be between 0 and 100')
+
+            taxable = round(qty * rate, 2)
+            cgst, sgst, igst = calc_gst(taxable, gst_pct, seller_state, buyer_state)
+            total_taxable += taxable
+            total_cgst += cgst
+            total_sgst += sgst
+            total_igst += igst
+            clean_items.append({**item, 'taxable_amount': taxable, 'cgst': cgst, 'sgst': sgst, 'igst': igst})
+
+        grand_total = round(total_taxable + total_cgst + total_sgst + total_igst, 2)
+        customer_state_name = d.get('customer_state_name') or co.get('state_name') or 'Gujarat'
+        place_of_supply = f"{buyer_state}-{customer_state_name}"
+
+        cur = conn.execute(
+            """
+            INSERT INTO invoices (company_id,invoice_no,invoice_type,date,customer_id,customer_name,
+            customer_address,customer_gstin,customer_state_code,place_of_supply,
+            taxable_amount,cgst,sgst,igst,grand_total,status,notes,pdf_url,sync_status,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+            """,
+            (
+                company_id,
+                invoice_no,
+                d.get('invoice_type', 'TAX INVOICE'),
+                inv_date,
+                customer_id,
+                customer_name,
+                customer_address,
+                customer_gstin,
+                buyer_state,
+                place_of_supply,
+                round(total_taxable, 2),
+                round(total_cgst, 2),
+                round(total_sgst, 2),
+                round(total_igst, 2),
+                grand_total,
+                d.get('status', 'final'),
+                d.get('notes', ''),
+                '',
+                'pending',
+            ),
+        )
+        iid = cur.lastrowid
+
+        for item in clean_items:
+            conn.execute(
+                """
+                INSERT INTO invoice_items (invoice_id,product_id,product_name,hsn_code,
+                qty,rate,taxable_amount,gst_percent,cgst,sgst,igst,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))
+                """,
+                (
+                    iid,
+                    item.get('product_id'),
+                    item.get('product_name'),
+                    item.get('hsn_code'),
+                    to_float(item.get('qty', 1), 'item.qty'),
+                    to_float(item.get('rate', 0), 'item.rate'),
+                    item['taxable_amount'],
+                    to_float(item.get('gst_percent', 18), 'item.gst_percent'),
+                    item['cgst'],
+                    item['sgst'],
+                    item['igst'],
+                ),
+            )
+
+        if not auto_generated_number:
+            advance_invoice_no(conn, invoice_no, company_id)
+
+        credit_applied = 0.0
+        remaining_due = grand_total
+        if customer_id:
+            bal_info = get_customer_balance(conn, customer_id, company_id)
+            available_credit = max(bal_info['balance'], 0)
+            add_ledger_entry(
+                conn,
+                customer_id,
+                'debit',
+                grand_total,
+                f'Invoice #{invoice_no}',
+                str(iid),
+                company_id,
+            )
+            if available_credit > 0:
+                credit_applied = round(min(available_credit, grand_total), 2)
+                remaining_due = round(grand_total - credit_applied, 2)
+
+        invoice = conn.execute(
+            "SELECT * FROM invoices WHERE id=? AND company_id=?",
+            (iid, company_id),
+        ).fetchone()
+        items_rows = conn.execute("SELECT * FROM invoice_items WHERE invoice_id=?", (iid,)).fetchall()
+
+        inv_data = dict(invoice)
+        inv_data['company_id'] = company_id
+        inv_data['items'] = [dict(i) for i in items_rows]
+        inv_data['company'] = co
+        inv_data['amount_words'] = num_to_words(round(inv_data['grand_total']))
+        total_gst = inv_data['cgst'] + inv_data['sgst'] + inv_data['igst']
+        inv_data['gst_words'] = num_to_words(round(total_gst))
+
+        try:
+            if APP_MODE == 'cloud':
+                pdf_url = generate_pdf(inv_data, mode='cloud')
+                sync_status = 'synced'
+            else:
+                pdf_url = generate_pdf(inv_data, mode='local')
+                sync_status = 'pending'
+        except Exception as exc:
+            raise RuntimeError(f'PDF generation failed: {exc}') from exc
+
+        conn.execute(
+            """
+            UPDATE invoices
+            SET pdf_url=?, sync_status=?, updated_at=datetime('now')
+            WHERE id=? AND company_id=?
+            """,
+            (pdf_url, sync_status, iid, company_id),
+        )
+
+        invoice = conn.execute(
+            "SELECT * FROM invoices WHERE id=? AND company_id=?",
+            (iid, company_id),
+        ).fetchone()
+        items_rows = conn.execute("SELECT * FROM invoice_items WHERE invoice_id=?", (iid,)).fetchall()
+
+        if APP_MODE != 'cloud':
+            invoice_payload = dict(invoice)
+            invoice_payload['items'] = [dict(i) for i in items_rows]
+            enqueue_sync(conn, company_id, 'invoice', 'create', invoice_payload)
+
         conn.commit()
-    conn.close()
-    result = dict(invoice)
-    result['items'] = [dict(i) for i in items_rows]
-    result['credit_applied'] = credit_applied
-    result['remaining_due'] = remaining_due
-    return jsonify(result), 201
+
+        result = dict(invoice)
+        result['items'] = [dict(i) for i in items_rows]
+        result['credit_applied'] = credit_applied
+        result['remaining_due'] = remaining_due
+        return jsonify(result), 201
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        msg = str(exc).lower()
+        if 'unique' in msg and 'invoice' in msg:
+            return jsonify({'error': 'invoice number already exists'}), 409
+        return jsonify({'error': f'database integrity error: {exc}'}), 409
+    except RuntimeError as exc:
+        conn.rollback()
+        return jsonify({'error': str(exc)}), 502
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'error': f'failed to create invoice: {exc}'}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/invoices/<int:iid>', methods=['GET'])
 def get_invoice(iid):
@@ -968,6 +1318,22 @@ def get_invoice(iid):
 def delete_invoice(iid):
     company_id = current_company_id()
     conn = get_db()
+    invoice = conn.execute(
+        "SELECT id, invoice_no FROM invoices WHERE id=? AND company_id=?",
+        (iid, company_id),
+    ).fetchone()
+    if not invoice:
+        conn.close()
+        return jsonify({'error': 'Invoice not found'}), 404
+
+    payment_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM payments WHERE invoice_id=? AND company_id=?",
+        (iid, company_id),
+    ).fetchone()['c']
+    if payment_count > 0:
+        conn.close()
+        return jsonify({'error': 'Cannot delete invoice with linked payments'}), 409
+
     conn.execute("DELETE FROM invoices WHERE id=? AND company_id=?", (iid, company_id))
     if APP_MODE != 'cloud':
         enqueue_sync(conn, company_id, 'invoice', 'delete', {'id': iid})
@@ -1067,7 +1433,31 @@ def invoice_pdf_path(iid):
 def add_payment():
     company_id = current_company_id()
     d = request.json or {}
+
+    invoice_id = d.get('invoice_id')
+    if invoice_id in (None, ''):
+        return jsonify({'error': 'invoice_id is required'}), 400
+    try:
+        invoice_id = int(invoice_id)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invoice_id must be a valid integer'}), 400
+
+    try:
+        amount = to_float(d.get('amount', 0), 'amount')
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    if amount <= 0:
+        return jsonify({'error': 'amount must be greater than 0'}), 400
+
     conn = get_db()
+    invoice = conn.execute(
+        "SELECT id FROM invoices WHERE id=? AND company_id=?",
+        (invoice_id, company_id),
+    ).fetchone()
+    if not invoice:
+        conn.close()
+        return jsonify({'error': 'invoice not found for this company'}), 404
+
     cur = conn.execute(
         """
         INSERT INTO payments (company_id,invoice_id,amount,payment_date,mode,reference,updated_at)
@@ -1075,8 +1465,8 @@ def add_payment():
         """,
         (
             company_id,
-            d.get('invoice_id'),
-            float(d.get('amount', 0)),
+            invoice_id,
+            amount,
             d.get('payment_date', date.today().isoformat()),
             d.get('mode', 'Cash'),
             d.get('reference', ''),
@@ -1100,7 +1490,10 @@ def ledger_record_payment():
     company_id = current_company_id()
     d = request.json or {}
     cid = d.get('customer_id')
-    amount = float(d.get('amount', 0))
+    try:
+        amount = to_float(d.get('amount', 0), 'amount')
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     if not cid or amount <= 0:
         return jsonify({'error': 'customer_id and positive amount required'}), 400
     desc = d.get('description', 'Payment received')
@@ -1210,22 +1603,33 @@ def get_date_filter_ext(req, period_type_override=None):
     period_type = period_type_override or req.args.get('period_type')
     if period_type == 'yearly':
         year = req.args.get('year', str(date.today().year))
+        if not re.fullmatch(r'\d{4}', str(year).strip()):
+            raise ValueError('year must be a 4-digit value')
         return "strftime('%Y', i.date)=?", [year], year
     elif period_type == 'date':
         start_date = req.args.get('start_date', '')
         end_date = req.args.get('end_date', '')
-        safe_str = f"{start_date}_to_{end_date}"
-        return "i.date >= ? AND i.date <= ?", [start_date, end_date], safe_str
+        start = parse_iso_date_param(start_date, 'start_date')
+        end = parse_iso_date_param(end_date, 'end_date')
+        if not start or not end:
+            raise ValueError('start_date and end_date are required for date period')
+        if start > end:
+            raise ValueError('start_date must be less than or equal to end_date')
+        safe_str = f"{start.isoformat()}_to_{end.isoformat()}"
+        return "i.date >= ? AND i.date <= ?", [start.isoformat(), end.isoformat()], safe_str
     elif period_type == 'all':
         return "1=1", [], "AllTime"
     else:
-        month = req.args.get('month', date.today().strftime('%Y-%m'))
+        month = parse_period_month_param(req.args.get('month', date.today().strftime('%Y-%m')))
         flt = "strftime('%Y', i.date)=?" if len(month) == 4 else "strftime('%Y-%m', i.date)=?"
         return flt, [month], month
 
 @app.route('/api/reports/monthly')
 def monthly_report():
-    return jsonify(_build_sales_report_payload())
+    try:
+        return jsonify(_build_sales_report_payload())
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
 
 def _build_sales_report_payload(period_type_override=None):
@@ -1277,15 +1681,22 @@ def _build_sales_report_payload(period_type_override=None):
 @app.route('/api/reports/yearly')
 def yearly_report_compat():
     # Legacy route kept for compatibility; yearly filtering now shares monthly report logic.
-    return jsonify(_build_sales_report_payload(period_type_override='yearly'))
+    try:
+        return jsonify(_build_sales_report_payload(period_type_override='yearly'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
 @app.route('/api/reports/sales-pdf')
 def sales_report_pdf():
     company_id = current_company_id()
     customer_id = request.args.get('customer_id')
+    try:
+        date_filter, date_params, period_str = get_date_filter_ext(request)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
     conn = get_db()
-    
-    date_filter, date_params, period_str = get_date_filter_ext(request)
+
     params = [company_id] + list(date_params)
     
     query = f"SELECT i.* FROM invoices i WHERE i.company_id=? AND {date_filter}"
@@ -1391,9 +1802,13 @@ def sales_report_pdf():
 def gstr1_report():
     company_id = current_company_id()
     customer_id = request.args.get('customer_id')
+    try:
+        date_filter, date_params, period_str = get_date_filter_ext(request)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
     conn = get_db()
-    
-    date_filter, date_params, period_str = get_date_filter_ext(request)
+
     params = [company_id] + list(date_params)
     
     query = f"""
@@ -1417,9 +1832,13 @@ def gstr1_report():
 def hsn_summary():
     company_id = current_company_id()
     customer_id = request.args.get('customer_id')
+    try:
+        date_filter, date_params, period_str = get_date_filter_ext(request)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
     conn = get_db()
-    
-    date_filter, date_params, period_str = get_date_filter_ext(request)
+
     params = [company_id] + list(date_params)
     
     query = f"""
@@ -1449,13 +1868,13 @@ def hsn_summary_compat():
 @app.route('/api/reports/customer-ledger')
 def customer_ledger():
     company_id = current_company_id()
-    cid = request.args.get('customer_id')
+    cid = request.args.get('customer_id', type=int)
     conn = get_db()
     q = """
         SELECT i.*, COALESCE((SELECT SUM(amount) FROM payments WHERE invoice_id=i.id AND company_id=?),0) paid
         FROM invoices i WHERE i.company_id=?"""
     params = [company_id, company_id]
-    if cid:
+    if cid is not None:
         q += " AND i.customer_id=?"; params.append(cid)
     q += " ORDER BY i.date DESC"
     rows = conn.execute(q, params).fetchall()
@@ -1514,7 +1933,11 @@ def reserve_invoice_number_block():
     year = datetime.utcnow().year
     conn = get_db()
     co = get_company_dict(conn, company_id)
-    next_no = int(co.get('next_invoice_no', '1') or 1)
+    try:
+        next_no = int(co.get('next_invoice_no', '1') or 1)
+    except Exception:
+        next_no = 1
+    prefix = normalize_invoice_prefix(co.get('invoice_prefix', 'GT/'))
 
     max_existing = conn.execute(
         """
@@ -1545,6 +1968,20 @@ def reserve_invoice_number_block():
         """,
         (company_id, str(end_no + 1)),
     )
+    conn.execute(
+        """
+        INSERT INTO invoice_counters (company_id, year, next_no, created_at, updated_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(company_id, year)
+        DO UPDATE SET
+            next_no = CASE
+                WHEN invoice_counters.next_no < excluded.next_no THEN excluded.next_no
+                ELSE invoice_counters.next_no
+            END,
+            updated_at = datetime('now')
+        """,
+        (company_id, year, end_no + 1),
+    )
     conn.commit()
     conn.close()
 
@@ -1553,67 +1990,29 @@ def reserve_invoice_number_block():
             'year': year,
             'start_no': start_no,
             'end_no': end_no,
-            'format_preview': format_invoice_number(start_no),
+            'format_preview': format_invoice_number(start_no, prefix, year),
         }
     )
 
 
 @app.route('/api/sync/push', methods=['POST'])
 def sync_push():
-    company_id = current_company_id()
-    payload = request.json or {}
-    changes = payload.get('changes') or []
-
-    if not isinstance(changes, list):
-        return jsonify({'error': 'changes must be a list'}), 400
-
-    conn = get_db()
-    try:
-        results = apply_push_payload(conn, company_id, changes)
-        conn.commit()
-        return jsonify({'success': True, 'results': results, 'server_time': datetime.utcnow().isoformat() + 'Z'})
-    except Exception as exc:
-        conn.rollback()
-        return jsonify({'error': f'sync push failed: {exc}'}), 500
-    finally:
-        conn.close()
+    return jsonify({'error': 'legacy sync endpoints are retired in cloud-only mode'}), 410
 
 
 @app.route('/api/sync/pull', methods=['GET'])
 def sync_pull():
-    company_id = current_company_id()
-    since = request.args.get('since', '')
-    conn = get_db()
-    try:
-        payload = build_pull_payload(conn, company_id, since)
-        payload['pending_queue'] = list_pending_sync(conn, company_id)
-        return jsonify(payload)
-    finally:
-        conn.close()
+    return jsonify({'error': 'legacy sync endpoints are retired in cloud-only mode'}), 410
 
 
 @app.route('/api/sync/queue/<int:queue_id>', methods=['POST'])
 def sync_queue_mark(queue_id):
-    company_id = current_company_id()
-    payload = request.json or {}
-    status = payload.get('status', 'synced')
-    error = payload.get('error', '')
-
-    conn = get_db()
-    row = conn.execute(
-        'SELECT id FROM sync_queue WHERE id=? AND company_id=?',
-        (queue_id, company_id),
-    ).fetchone()
-    if not row:
-        conn.close()
-        return jsonify({'error': 'queue item not found'}), 404
-
-    mark_sync_status(conn, queue_id, status, error)
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
+    return jsonify({'error': 'legacy sync endpoints are retired in cloud-only mode'}), 410
 
 if __name__ == '__main__':
     init_db()
-    print("Starting Arvind Billing System Backend on port 5000...")
-    app.run(port=5000, debug=False, threaded=True)
+    host = os.getenv('HOST', '0.0.0.0')
+    port = int(os.getenv('PORT', os.getenv('BILLING_BACKEND_PORT', '5000')))
+    debug = os.getenv('FLASK_DEBUG', '0') == '1'
+    print(f"Starting Arvind Billing System Backend on {host}:{port}...")
+    app.run(host=host, port=port, debug=debug, threaded=True)

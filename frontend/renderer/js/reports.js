@@ -17,6 +17,7 @@ function initReports() {
 
   // Setup year filter
   const ySel = document.getElementById('report-year')
+  ySel.innerHTML = ''
   const curYear = new Date().getFullYear()
   for (let y = curYear - 5; y <= curYear + 2; y++) {
     const opt = document.createElement('option')

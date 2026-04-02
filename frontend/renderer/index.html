@@ -55,6 +55,15 @@
       </div>
     </div>
 
+    <div id="auth-lock-overlay" class="auth-lock-overlay" aria-hidden="true">
+      <div class="auth-lock-card">
+        <div class="auth-lock-icon"><i class="fas fa-lock"></i></div>
+        <h2>Authentication Required</h2>
+        <p>Sign in to view and manage billing data shared across web and desktop.</p>
+        <button class="btn btn-primary" id="auth-lock-signin-btn" type="button">Sign In to Continue</button>
+      </div>
+    </div>
+
     <!-- ══ DASHBOARD ══════════════════════════════════════════════════════ -->
     <div id="page-dashboard" class="page active">
       <div class="row g-3 mb-4" id="stat-cards">
@@ -640,55 +649,23 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header bg-primary text-white">
-        <h5 class="modal-title">Cloud Sign In</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <h5 class="modal-title">Sign In</h5>
       </div>
       <div class="modal-body">
-        <div class="mb-3">
-          <label class="form-label fw-semibold">Cloud API Base URL</label>
-          <input type="text" class="form-control" id="cloud-api-base" placeholder="https://api.yourdomain.com/api"/>
-          <div class="form-check mt-2">
-            <input class="form-check-input" type="checkbox" id="cloud-enabled"/>
-            <label class="form-check-label" for="cloud-enabled">Enable cloud mode when online</label>
+        <p class="text-muted small mb-3">Sign in to access billing data shared by desktop and web.</p>
+        <form id="login-form" novalidate>
+          <div class="mb-2">
+            <label class="form-label fw-semibold" for="login-username">Username</label>
+            <input type="text" class="form-control" id="login-username" placeholder="admin" autocomplete="username"/>
           </div>
-        </div>
-
-        <ul class="nav nav-tabs" role="tablist">
-          <li class="nav-item" role="presentation">
-            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-login" type="button" role="tab">Login</button>
-          </li>
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-register" type="button" role="tab">Register</button>
-          </li>
-        </ul>
-
-        <div class="tab-content pt-3">
-          <div class="tab-pane fade show active" id="tab-login" role="tabpanel">
-            <div class="mb-2">
-              <label class="form-label fw-semibold">Username</label>
-              <input type="text" class="form-control" id="login-username" placeholder="admin"/>
-            </div>
-            <div class="mb-2">
-              <label class="form-label fw-semibold">Password</label>
-              <input type="password" class="form-control" id="login-password"/>
-            </div>
-            <button class="btn btn-primary w-100" id="login-btn" type="button">Login</button>
+          <div class="mb-2">
+            <label class="form-label fw-semibold" for="login-password">Password</label>
+            <input type="password" class="form-control" id="login-password" autocomplete="current-password"/>
           </div>
-          <div class="tab-pane fade" id="tab-register" role="tabpanel">
-            <div class="mb-2">
-              <label class="form-label fw-semibold">Email</label>
-              <input type="email" class="form-control" id="register-email"/>
-            </div>
-            <div class="mb-2">
-              <label class="form-label fw-semibold">Password</label>
-              <input type="password" class="form-control" id="register-password"/>
-            </div>
-            <div class="mb-2">
-              <label class="form-label fw-semibold">Company ID</label>
-              <input type="number" class="form-control" id="register-company-id" value="1" min="1"/>
-            </div>
-            <button class="btn btn-success w-100" id="register-btn" type="button">Create Account</button>
-          </div>
+          <button class="btn btn-primary w-100" id="login-btn" type="submit">Login</button>
+        </form>
+        <div class="text-muted small mt-2" id="auth-help-text">
+          Contact admin if you do not have login credentials.
         </div>
       </div>
     </div>
@@ -715,6 +692,7 @@
       isFile
         ? '../node_modules/chart.js/dist/chart.umd.js'
         : 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
+      'runtime-config.js',
       'js/api.js',
       'js/app.js',
       'js/dashboard.js',

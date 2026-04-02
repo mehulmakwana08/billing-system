@@ -6,6 +6,9 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "pretest:e2e": "playwright install chromium",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
     "build-win": "electron-builder --win",
     "build-mac": "electron-builder --mac",
     "build-linux": "electron-builder --linux"
@@ -51,6 +54,7 @@
     "chart.js": "^4.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.53.0",
     "electron": "^31.0.0",
     "electron-builder": "^24.0.0"
   }

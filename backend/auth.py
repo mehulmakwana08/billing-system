@@ -7,7 +7,24 @@ import jwt
 from flask import g, jsonify, request
 
 
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-change-me")
+def _load_jwt_secret() -> str:
+    secret = (os.getenv("JWT_SECRET") or "").strip()
+    if secret:
+        return secret
+
+    app_mode = (os.getenv("APP_MODE") or "offline").strip().lower()
+    auth_required = os.getenv("AUTH_REQUIRED", "0") == "1" or app_mode == "cloud"
+    if auth_required:
+        raise RuntimeError(
+            "JWT_SECRET must be set when authentication is enabled "
+            "(APP_MODE=cloud or AUTH_REQUIRED=1)."
+        )
+
+    # Local offline fallback only.
+    return "dev-insecure-local-only-change-me-32bytes"
+
+
+JWT_SECRET = _load_jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRES_HOURS = int(os.getenv("JWT_EXPIRES_HOURS", "24"))
 

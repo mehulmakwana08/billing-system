@@ -4,6 +4,14 @@ const path = require('path')
 const http = require('http')
 const fs = require('fs')
 
+const BACKEND_HOST = process.env.BILLING_BACKEND_HOST || '127.0.0.1'
+const BACKEND_PORT = Number.parseInt(process.env.BILLING_BACKEND_PORT || '5000', 10)
+const RAW_BACKEND_ORIGIN = process.env.BILLING_BACKEND_ORIGIN || `http://${BACKEND_HOST}:${BACKEND_PORT}`
+const BACKEND_ORIGIN = RAW_BACKEND_ORIGIN.replace(/\/+$/, '')
+const HEALTH_URL = `${BACKEND_ORIGIN}/api/health`
+const CLOUD_ONLY_MODE = process.env.BILLING_CLOUD_ONLY_MODE !== '0'
+const USE_EXTERNAL_BACKEND = CLOUD_ONLY_MODE || process.env.BILLING_USE_EXTERNAL_BACKEND === '1'
+
 let mainWindow
 let flaskProcess
 
@@ -21,7 +29,7 @@ app.on('second-instance', () => {
 
 function probeFlask(timeoutMs = 1000) {
   return new Promise(resolve => {
-    const req = http.get('http://localhost:5000/api/health', res => {
+    const req = http.get(HEALTH_URL, res => {
       res.resume()
       resolve(res.statusCode === 200)
     })
@@ -62,10 +70,10 @@ function startFlask() {
 }
 
 // ── Wait for Flask ready ─────────────────────────────────────────────────────
-function waitForFlask(callback, retries = 40) {
-  const req = http.get('http://localhost:5000/api/health', res => {
+function waitForFlask(callback, retries = 40, externalOnly = false) {
+  const req = http.get(HEALTH_URL, res => {
     if (res.statusCode === 200) {
-      console.log('[Electron] Flask is ready')
+      console.log(`[Electron] Backend is ready at ${BACKEND_ORIGIN}`)
       callback()
     } else {
       retry()
@@ -76,14 +84,24 @@ function waitForFlask(callback, retries = 40) {
 
   function retry() {
     if (retries > 0) {
-      setTimeout(() => waitForFlask(callback, retries - 1), 500)
+      setTimeout(() => waitForFlask(callback, retries - 1, externalOnly), 500)
     } else {
-      console.error('[Electron] Flask failed to start!')
-      dialog.showErrorBox('Backend Error',
-        'Could not start the billing backend.\n\n' +
-        'Please ensure Python 3 is installed and run:\n' +
-        '  pip install flask reportlab\n\n' +
-        'Then restart the application.')
+      if (externalOnly) {
+        console.error('[Electron] External backend is unavailable')
+        dialog.showErrorBox(
+          'Backend Error',
+          'Desktop is running in cloud-only mode and external backend is required.\n\n' +
+          `Expected backend URL:\n  ${HEALTH_URL}\n\n` +
+          'Start backend/app.py first, then relaunch desktop.'
+        )
+      } else {
+        console.error('[Electron] Backend failed to start!')
+        dialog.showErrorBox('Backend Error',
+          'Could not start the billing backend.\n\n' +
+          'Please ensure Python 3 is installed and run:\n' +
+          '  pip install flask reportlab\n\n' +
+          'Then restart the application.')
+      }
     }
   }
 }
@@ -163,12 +181,14 @@ ipcMain.handle('confirm', async (event, { message, detail }) => {
 app.whenReady().then(async () => {
   const backendReady = await probeFlask()
   if (backendReady) {
-    console.log('[Electron] Reusing existing Flask backend on port 5000')
+    console.log(`[Electron] Reusing existing backend at ${BACKEND_ORIGIN}`)
+  } else if (USE_EXTERNAL_BACKEND) {
+    console.log(`[Electron] External backend mode enabled; waiting for ${BACKEND_ORIGIN}`)
   } else {
     startFlask()
   }
 
-  waitForFlask(createWindow)
+  waitForFlask(createWindow, 40, USE_EXTERNAL_BACKEND)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

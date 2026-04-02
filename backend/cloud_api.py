@@ -1,10 +1,12 @@
 from datetime import datetime, timezone
+import os
+import re
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -27,14 +29,49 @@ from models import (
 load_dotenv()
 
 
+DEFAULT_CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5000',
+    'http://127.0.0.1:5000',
+    'null',
+]
+
+
+def _load_allowed_cors_origins() -> List[str]:
+    configured = os.getenv('CORS_ALLOWED_ORIGINS', '')
+    values = [origin.strip() for origin in configured.split(',') if origin.strip()]
+    return values or DEFAULT_CORS_ALLOWED_ORIGINS
+
+
+CORS_ALLOWED_ORIGINS = _load_allowed_cors_origins()
+ALLOWED_COMPANY_SETTING_KEYS = {
+    'name',
+    'address',
+    'gstin',
+    'state_code',
+    'state_name',
+    'phone',
+    'email',
+    'invoice_prefix',
+    'next_invoice_no',
+    'terms',
+    'bank_name',
+    'bank_account',
+    'bank_ifsc',
+    'bank_branch',
+}
+PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
+
+
 app = FastAPI(title="Billing Cloud API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -43,8 +80,21 @@ Base.metadata.create_all(bind=engine)
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH)
     company_id: int = 1
+
+    @field_validator('password')
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        if not re.search(r'[A-Z]', value):
+            raise ValueError('password must include at least one uppercase letter')
+        if not re.search(r'[a-z]', value):
+            raise ValueError('password must include at least one lowercase letter')
+        if not re.search(r'\d', value):
+            raise ValueError('password must include at least one digit')
+        if not re.search(r'[^A-Za-z0-9]', value):
+            raise ValueError('password must include at least one special character')
+        return value
 
 
 class LoginRequest(BaseModel):
@@ -99,9 +149,41 @@ def get_setting_map(db: Session, company_id: int) -> Dict[str, str]:
     return {r.key: r.value for r in rows}
 
 
-def format_invoice_number(counter: int) -> str:
+def _normalize_invoice_prefix(prefix: str) -> str:
+    value = (prefix or 'GT/').strip()
+    if not value:
+        value = 'GT/'
+    return value if value.endswith('/') else f"{value}/"
+
+
+def _validate_company_payload(payload: Dict[str, Any]) -> Dict[str, str]:
+    unknown_keys = sorted([k for k in payload.keys() if k not in ALLOWED_COMPANY_SETTING_KEYS])
+    if unknown_keys:
+        raise HTTPException(status_code=400, detail=f"unsupported company setting keys: {', '.join(unknown_keys)}")
+
+    normalized: Dict[str, str] = {}
+    for key, value in payload.items():
+        text = str(value if value is not None else '').strip()
+        if key == 'state_code' and text and not re.fullmatch(r'\d{2}', text):
+            raise HTTPException(status_code=400, detail='state_code must be a 2-digit code')
+        if key == 'next_invoice_no':
+            try:
+                next_no = int(text)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail='next_invoice_no must be a positive integer')
+            if next_no < 1:
+                raise HTTPException(status_code=400, detail='next_invoice_no must be a positive integer')
+            text = str(next_no)
+        if key == 'invoice_prefix':
+            text = _normalize_invoice_prefix(text)
+        normalized[key] = text
+
+    return normalized
+
+
+def format_invoice_number(counter: int, prefix: str = 'GT/') -> str:
     year = datetime.utcnow().year
-    return f"GT/{year}/{int(counter):05d}"
+    return f"{_normalize_invoice_prefix(prefix)}{year}/{int(counter):05d}"
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -552,9 +634,13 @@ def get_company(claims: Dict[str, Any] = Depends(parse_auth), db: Session = Depe
 def update_company(
     payload: Dict[str, Any], claims: Dict[str, Any] = Depends(parse_auth), db: Session = Depends(get_db)
 ):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail='company settings payload must be an object')
+
     company_id = int(claims.get("company_id", 1))
-    for key, value in payload.items():
-        ensure_setting(db, company_id, key, str(value))
+    normalized = _validate_company_payload(payload)
+    for key, value in normalized.items():
+        ensure_setting(db, company_id, key, value)
     db.commit()
     return {"success": True}
 
@@ -564,7 +650,8 @@ def next_invoice_number(claims: Dict[str, Any] = Depends(parse_auth), db: Sessio
     company_id = int(claims.get("company_id", 1))
     settings = get_setting_map(db, company_id)
     next_no = int(settings.get("next_invoice_no", "1") or 1)
-    return {"invoice_no": format_invoice_number(next_no)}
+    prefix = settings.get('invoice_prefix', 'GT/')
+    return {"invoice_no": format_invoice_number(next_no, prefix)}
 
 
 @app.post("/api/invoices/reserve-number-block")
@@ -578,6 +665,7 @@ def reserve_number_block(
 
     settings = get_setting_map(db, company_id)
     next_no = int(settings.get("next_invoice_no", "1") or 1)
+    prefix = settings.get('invoice_prefix', 'GT/')
 
     max_existing = (
         db.query(func.max(InvoiceNumberBlock.end_no))
@@ -604,7 +692,7 @@ def reserve_number_block(
         "year": year,
         "start_no": start_no,
         "end_no": end_no,
-        "format_preview": format_invoice_number(start_no),
+        "format_preview": format_invoice_number(start_no, prefix),
     }
 
 

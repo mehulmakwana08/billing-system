@@ -107,6 +107,15 @@ body {
   font-weight: 600;
 }
 
+.layout.auth-locked .sidebar-nav li a {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.layout.auth-locked .sidebar-nav li a.active {
+  opacity: 0.8;
+}
+
 .nav-divider {
   height: 1px;
   background: rgba(255, 255, 255, 0.08);
@@ -126,6 +135,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
 .topbar {
@@ -149,6 +159,62 @@ body {
 .topbar-actions {
   display: flex;
   gap: 8px;
+}
+
+.auth-lock-overlay {
+  position: absolute;
+  inset: 58px 0 0;
+  z-index: 25;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(30, 77, 140, 0.14), transparent 45%),
+    linear-gradient(180deg, rgba(244, 246, 250, 0.95), rgba(236, 241, 249, 0.97));
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+.auth-lock-overlay.visible {
+  display: flex;
+}
+
+.auth-lock-card {
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(15, 39, 68, 0.18);
+  padding: 24px;
+}
+
+.auth-lock-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--navy-l);
+  color: var(--navy);
+  font-size: 20px;
+}
+
+.auth-lock-card h2 {
+  margin-bottom: 8px;
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.auth-lock-card p {
+  margin-bottom: 16px;
+  color: var(--muted);
+  font-size: 13.5px;
 }
 
 /* ── Pages ─────────────────────────────────────────────────────────────── */
@@ -529,5 +595,14 @@ body {
   .sidebar-nav li a {
     justify-content: center;
     padding: 12px 0;
+  }
+
+  .auth-lock-overlay {
+    inset: 58px 0 0;
+    padding: 16px;
+  }
+
+  .auth-lock-card {
+    padding: 18px;
   }
 }

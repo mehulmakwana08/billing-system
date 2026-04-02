@@ -1,5 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+const BACKEND_HOST = process.env.BILLING_BACKEND_HOST || '127.0.0.1'
+const BACKEND_PORT = Number.parseInt(process.env.BILLING_BACKEND_PORT || '5000', 10)
+const RAW_BACKEND_ORIGIN = process.env.BILLING_BACKEND_ORIGIN || `http://${BACKEND_HOST}:${BACKEND_PORT}`
+const BACKEND_ORIGIN = RAW_BACKEND_ORIGIN.replace(/\/+$/, '')
+
 contextBridge.exposeInMainWorld('electronAPI', {
   // Open PDF file with system's default PDF viewer
   openPDF: (filePath) => ipcRenderer.invoke('open-pdf', filePath),
@@ -14,4 +19,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Environment info
   platform: process.platform,
+  backendOrigin: BACKEND_ORIGIN,
+  getBackendOrigin: () => BACKEND_ORIGIN,
 })
