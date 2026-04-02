@@ -1896,14 +1896,35 @@ def dashboard():
         (company_id,),
     ).fetchone()
 
-    monthly = conn.execute("""
-        SELECT strftime('%Y-%m', date) month,
-               COALESCE(SUM(grand_total),0) revenue,
-               COALESCE(SUM(taxable_amount),0) taxable,
-               COALESCE(SUM(cgst+sgst+igst),0) gst,
-               COUNT(*) count
-        FROM invoices WHERE company_id=? AND date >= date('now','-6 months')
-        GROUP BY month ORDER BY month""", (company_id,)).fetchall()
+    if USE_POSTGRES:
+        monthly = conn.execute(
+            """
+            SELECT to_char(NULLIF("date", '')::date, 'YYYY-MM') AS month,
+                   COALESCE(SUM(grand_total),0) revenue,
+                   COALESCE(SUM(taxable_amount),0) taxable,
+                   COALESCE(SUM(cgst+sgst+igst),0) gst,
+                   COUNT(*) count
+            FROM invoices
+            WHERE company_id=?
+              AND NULLIF("date", '')::date >= (CURRENT_DATE - INTERVAL '6 months')
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            (company_id,),
+        ).fetchall()
+    else:
+        monthly = conn.execute(
+            """
+            SELECT strftime('%Y-%m', date) month,
+                   COALESCE(SUM(grand_total),0) revenue,
+                   COALESCE(SUM(taxable_amount),0) taxable,
+                   COALESCE(SUM(cgst+sgst+igst),0) gst,
+                   COUNT(*) count
+            FROM invoices WHERE company_id=? AND date >= date('now','-6 months')
+            GROUP BY month ORDER BY month
+            """,
+            (company_id,),
+        ).fetchall()
 
     recent = conn.execute("""
         SELECT id, invoice_no, date, customer_name, grand_total, status
