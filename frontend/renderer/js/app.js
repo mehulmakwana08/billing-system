@@ -8,6 +8,12 @@ let _authModal = null
 let _isAuthenticated = false
 let _authLoginInFlight = false
 
+function appLog(level, event, details = {}) {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  if (!logger || typeof logger[level] !== 'function') return
+  logger[level](event, details)
+}
+
 function setAuthLocked(locked) {
   const layout = document.querySelector('.layout')
   const overlay = document.getElementById('auth-lock-overlay')
@@ -16,6 +22,7 @@ function setAuthLocked(locked) {
     overlay.classList.toggle('visible', locked)
     overlay.setAttribute('aria-hidden', locked ? 'false' : 'true')
   }
+  appLog('debug', 'auth.lock_state.changed', { locked })
 }
 
 function activateShellPage(name = 'dashboard') {
@@ -90,25 +97,40 @@ function getAuthModal() {
 }
 
 async function syncAuthState() {
+  appLog('debug', 'auth.sync.start', { has_token: Boolean(API.getToken()) })
   if (!API.getToken()) {
     refreshAuthUI(null)
+    appLog('info', 'auth.sync.no_token')
     return null
   }
   try {
     const me = await API.get('/auth/me')
     refreshAuthUI(me)
+    appLog('info', 'auth.sync.success', {
+      user_id: me.id || null,
+      company_id: me.company_id || null,
+      username: me.username || '',
+    })
     return me
-  } catch (_) {
+  } catch (err) {
     API.clearToken()
     refreshAuthUI(null)
+    appLog('warn', 'auth.sync.failed', { message: err.message })
     return null
   }
 }
 
 async function initializeAuthorizedSession() {
+  const startedAt = Date.now()
+  appLog('debug', 'session.initialize.start')
   await refreshCompany()
   await Promise.all([refreshCustomers(), refreshProducts()])
   showPage('dashboard')
+  appLog('info', 'session.initialize.success', {
+    duration_ms: Date.now() - startedAt,
+    customers: _customers.length,
+    products: _products.length,
+  })
 }
 
 async function authLogin() {
@@ -118,10 +140,12 @@ async function authLogin() {
   const password = document.getElementById('login-password').value
   const loginBtn = document.getElementById('login-btn')
   if (!username || !password) {
+    appLog('warn', 'auth.login.validation_failed', { reason: 'missing_credentials' })
     toast('Enter username and password', 'error')
     return
   }
   try {
+    appLog('info', 'auth.login.start', { username })
     _authLoginInFlight = true
     if (loginBtn) loginBtn.disabled = true
 
@@ -140,11 +164,17 @@ async function authLogin() {
 
     await initializeAuthorizedSession()
     refreshAuthUI(res.user)
+    appLog('info', 'auth.login.success', {
+      user_id: res.user && res.user.id ? res.user.id : null,
+      company_id: res.user && res.user.company_id ? res.user.company_id : null,
+      username: res.user && res.user.username ? res.user.username : username,
+    })
     toast('Signed in', 'success')
   } catch (err) {
     API.clearToken()
     refreshAuthUI(null)
     getAuthModal().show()
+    appLog('warn', 'auth.login.failed', { username, message: err.message })
     toast('Login failed: ' + err.message, 'error')
   } finally {
     _authLoginInFlight = false
@@ -156,6 +186,7 @@ function bindAuthControls() {
   document.getElementById('auth-open-btn').addEventListener('click', () => getAuthModal().show())
   document.getElementById('auth-lock-signin-btn')?.addEventListener('click', () => getAuthModal().show())
   document.getElementById('auth-logout-btn').addEventListener('click', () => {
+    appLog('info', 'auth.logout')
     API.clearToken()
     refreshAuthUI(null)
     getAuthModal().show()
@@ -184,11 +215,13 @@ const PAGE_TITLES = {
 }
 
 function showPage(name) {
+  appLog('debug', 'navigation.show_page.request', { page: name })
   if (!_isAuthenticated || !API.getToken()) {
     setAuthLocked(true)
     document.getElementById('page-title').textContent = 'Sign In Required'
     getAuthModal().show()
     if (name !== 'dashboard') {
+      appLog('warn', 'navigation.show_page.blocked', { page: name, reason: 'not_authenticated' })
       toast('Please sign in first', 'warning')
     }
     return
@@ -204,6 +237,7 @@ function showPage(name) {
   if (link) link.classList.add('active')
 
   document.getElementById('page-title').textContent = PAGE_TITLES[name] || name
+  appLog('info', 'navigation.show_page.success', { page: name })
 
   // Lifecycle hooks
   const hooks = {
@@ -302,19 +336,24 @@ function calcItemGST(qty, rate, gstPct, sellerState, buyerState) {
 // ── Caches ─────────────────────────────────────────────────────────────────────
 async function refreshCustomers() {
   _customers = await API.get('/customers')
+  appLog('debug', 'cache.customers.refreshed', { count: _customers.length })
   return _customers
 }
 async function refreshProducts() {
   _products = await API.get('/products')
+  appLog('debug', 'cache.products.refreshed', { count: _products.length })
   return _products
 }
 async function refreshCompany() {
   _company = await API.get('/company')
+  appLog('debug', 'cache.company.refreshed', { keys: Object.keys(_company || {}).length })
   return _company
 }
 
 // ── PDF Open ──────────────────────────────────────────────────────────────────
 async function openInvoicePDFInBrowser(invoiceId, filename) {
+  const startedAt = Date.now()
+  appLog('debug', 'invoice.pdf.browser_fetch.start', { invoice_id: invoiceId })
   const token = API.getToken()
   const streamUrl = `${API.getBaseUrl()}/invoices/${invoiceId}/pdf`
   const headers = {}
@@ -346,10 +385,17 @@ async function openInvoicePDFInBrowser(invoiceId, filename) {
   }
 
   setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
+  appLog('info', 'invoice.pdf.browser_fetch.success', {
+    invoice_id: invoiceId,
+    duration_ms: Date.now() - startedAt,
+    fallback_download: !opened,
+    filename: filename || '',
+  })
 }
 
 async function openInvoicePDF(invoiceId) {
   try {
+    appLog('info', 'invoice.pdf.open.start', { invoice_id: invoiceId })
     toast('Generating PDF…', 'info')
     const data = await API.get(`/invoices/${invoiceId}/pdf-path`)
     const target = data.path || data.pdf_url
@@ -365,6 +411,7 @@ async function openInvoicePDF(invoiceId) {
         await openInvoicePDFInBrowser(invoiceId, data.filename)
       } else {
         window.open(target, '_blank')
+        appLog('info', 'invoice.pdf.open.remote_url', { invoice_id: invoiceId })
       }
       return
     }
@@ -372,10 +419,16 @@ async function openInvoicePDF(invoiceId) {
     if (window.electronAPI) {
       const result = await window.electronAPI.openPDF(target)
       if (!result.success) toast('Could not open PDF: ' + result.error, 'error')
+      appLog(result.success ? 'info' : 'warn', 'invoice.pdf.open.desktop', {
+        invoice_id: invoiceId,
+        success: Boolean(result.success),
+        message: result.error || '',
+      })
     } else {
       await openInvoicePDFInBrowser(invoiceId, data.filename)
     }
   } catch (e) {
+    appLog('error', 'invoice.pdf.open.failed', { invoice_id: invoiceId, message: e.message })
     toast('PDF error: ' + e.message, 'error')
   }
 }
@@ -386,26 +439,29 @@ let _appBootstrapped = false
 async function bootstrapApp() {
   if (_appBootstrapped) return
   _appBootstrapped = true
+  appLog('info', 'app.bootstrap.start')
 
   bindAuthControls()
   const me = await syncAuthState()
   if (!me) {
     setAuthLocked(true)
     getAuthModal().show()
+    appLog('info', 'app.bootstrap.awaiting_login')
     return
   }
 
   await initializeAuthorizedSession()
+  appLog('info', 'app.bootstrap.complete')
 }
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     bootstrapApp().catch((err) => {
-      console.error('App bootstrap failed:', err)
+      appLog('error', 'app.bootstrap.failed', { message: err.message, stack: err.stack })
     })
   }, { once: true })
 } else {
   bootstrapApp().catch((err) => {
-    console.error('App bootstrap failed:', err)
+    appLog('error', 'app.bootstrap.failed', { message: err.message, stack: err.stack })
   })
 }

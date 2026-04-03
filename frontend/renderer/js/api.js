@@ -1,6 +1,14 @@
 /* api.js — Cloud-only single-backend API client */
 
 const API = (() => {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  let requestSeq = 0
+
+  function log(level, event, details) {
+    if (!logger || typeof logger[level] !== 'function') return
+    logger[level](event, details)
+  }
+
   function normalizeBase(url, fallback = '') {
     const trimmed = String(url || '').trim().replace(/\/+$/, '')
     if (!trimmed) return fallback
@@ -34,6 +42,12 @@ const API = (() => {
 
   let token = localStorage.getItem('auth_token') || ''
 
+  log('info', 'api.client.initialized', {
+    base_url: BASE_URL,
+    desktop_mode: Boolean(desktopBase),
+    has_cached_token: Boolean(token),
+  })
+
   function isOnline() {
     return typeof navigator === 'undefined' ? true : navigator.onLine
   }
@@ -43,26 +57,71 @@ const API = (() => {
   }
 
   async function request(method, path, body) {
+    const requestId = ++requestSeq
+    const startedAt = Date.now()
     const headers = { 'Content-Type': 'application/json' }
     if (token) headers.Authorization = `Bearer ${token}`
 
     const opts = { method, headers }
     if (body !== undefined) opts.body = JSON.stringify(body)
 
-    const res = await fetch(BASE_URL + path, opts)
+    log('debug', 'api.request.start', {
+      request_id: requestId,
+      method,
+      path,
+      online: isOnline(),
+    })
+
+    let res
+    try {
+      res = await fetch(BASE_URL + path, opts)
+    } catch (err) {
+      log('error', 'api.request.network_error', {
+        request_id: requestId,
+        method,
+        path,
+        duration_ms: Date.now() - startedAt,
+        message: err.message,
+      })
+      throw err
+    }
+
+    const durationMs = Date.now() - startedAt
     if (!res.ok) {
       const err = await parseJson(res)
-      throw new Error(err.error || err.message || `HTTP ${res.status}`)
+      const message = err.error || err.message || `HTTP ${res.status}`
+      log('warn', 'api.request.failed', {
+        request_id: requestId,
+        method,
+        path,
+        status: res.status,
+        duration_ms: durationMs,
+        message,
+      })
+      throw new Error(message)
     }
+
+    log('debug', 'api.request.success', {
+      request_id: requestId,
+      method,
+      path,
+      status: res.status,
+      duration_ms: durationMs,
+    })
 
     if (res.status === 204) return {}
     return parseJson(res)
   }
 
   function setToken(nextToken) {
+    const hadToken = Boolean(token)
     token = nextToken || ''
     if (token) localStorage.setItem('auth_token', token)
     else localStorage.removeItem('auth_token')
+    log('info', 'api.auth_token.updated', {
+      had_token: hadToken,
+      has_token: Boolean(token),
+    })
   }
 
   return {

@@ -3,12 +3,21 @@
 let _productModal = null
 let _savingProduct = false
 
+function logProducts(level, event, details = {}) {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  if (!logger || typeof logger[level] !== 'function') return
+  logger[level](event, details)
+}
+
 async function loadProducts() {
   try {
+    logProducts('debug', 'products.load.start')
     const list = await refreshProducts()
     renderProductTable(list)
     document.getElementById('prod-count').textContent = `Products (${list.length})`
+    logProducts('debug', 'products.load.success', { count: list.length })
   } catch (e) {
+    logProducts('error', 'products.load.failed', { message: e.message })
     toast('Failed to load products: ' + e.message, 'error')
   }
 }
@@ -58,6 +67,7 @@ document.getElementById('add-product-btn').addEventListener('click', () => {
 
 async function editProduct(id) {
   try {
+    logProducts('debug', 'products.edit.load.start', { product_id: id })
     const p = await API.get(`/products/${id}`)
     document.getElementById('prod-id').value   = p.id
     document.getElementById('prod-name').value = p.name || ''
@@ -66,7 +76,9 @@ async function editProduct(id) {
     document.getElementById('prod-rate').value = p.default_rate || 0
     document.getElementById('prod-gst').value  = p.gst_percent || 18
     openProductModal('Edit Product')
+    logProducts('debug', 'products.edit.load.success', { product_id: id })
   } catch (e) {
+    logProducts('error', 'products.edit.load.failed', { product_id: id, message: e.message })
     toast('Could not load product: ' + e.message, 'error')
   }
 }
@@ -89,6 +101,12 @@ async function saveProduct() {
 
   const id = document.getElementById('prod-id').value
   try {
+    logProducts('info', 'products.save.start', {
+      product_id: id ? Number(id) : null,
+      action: id ? 'update' : 'create',
+      name,
+      gst_percent: payload.gst_percent,
+    })
     _savingProduct = true
     if (saveBtn) saveBtn.disabled = true
 
@@ -103,7 +121,17 @@ async function saveProduct() {
     if (activeEl && typeof activeEl.blur === 'function') activeEl.blur()
     _productModal.hide()
     await loadProducts()
+    logProducts('info', 'products.save.success', {
+      product_id: id ? Number(id) : null,
+      action: id ? 'update' : 'create',
+      name,
+    })
   } catch (e) {
+    logProducts('error', 'products.save.failed', {
+      product_id: id ? Number(id) : null,
+      action: id ? 'update' : 'create',
+      message: e.message,
+    })
     toast('Save failed: ' + e.message, 'error')
   } finally {
     _savingProduct = false
@@ -124,10 +152,13 @@ async function deleteProduct(id, name) {
     : confirm(`Delete product "${name}"?`)
   if (!ok) return
   try {
+    logProducts('warn', 'products.delete.start', { product_id: id, name })
     await API.delete(`/products/${id}`)
+    logProducts('info', 'products.delete.success', { product_id: id, name })
     toast('Product deleted', 'success')
     await loadProducts()
   } catch (e) {
+    logProducts('error', 'products.delete.failed', { product_id: id, name, message: e.message })
     toast('Delete failed: ' + e.message, 'error')
   }
 }

@@ -5,11 +5,18 @@ let _viewInvoiceId = null
 let _sellerState = '24'
 let _savingInvoice = false
 
+function logInvoices(level, event, details = {}) {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  if (!logger || typeof logger[level] !== 'function') return
+  logger[level](event, details)
+}
+
 // ════════════════════════════════════════════════════════════════
 //  NEW INVOICE
 // ════════════════════════════════════════════════════════════════
 
 async function initNewInvoice() {
+  logInvoices('debug', 'invoices.new.init.start')
   // Set defaults
   document.getElementById('inv-date').value = todayISO()
   document.getElementById('inv-notes').value = ''
@@ -18,7 +25,9 @@ async function initNewInvoice() {
   try {
     const data = await API.get('/invoices/next-number')
     document.getElementById('inv-no').value = data.invoice_no
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    logInvoices('warn', 'invoices.next_number.failed', { message: e.message })
+  }
 
   // Populate customer dropdown
   const sel = document.getElementById('customer-select')
@@ -43,6 +52,11 @@ async function initNewInvoice() {
 
   // Get seller state
   _sellerState = (_company && _company.state_code) || '24'
+  logInvoices('debug', 'invoices.new.init.complete', {
+    customer_count: _customers.length,
+    product_count: _products.length,
+    seller_state: _sellerState,
+  })
 }
 
 // ── Customer select handler ───────────────────────────────────────────────────
@@ -234,10 +248,20 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
   }
 
   try {
+    logInvoices('info', 'invoices.create.start', {
+      invoice_no: payload.invoice_no,
+      customer_id: payload.customer_id,
+      item_count: items.length,
+      status: payload.status,
+    })
     _savingInvoice = true
     if (submitBtn) submitBtn.disabled = true
 
     const created = await API.post('/invoices', payload)
+    logInvoices('info', 'invoices.create.success', {
+      invoice_id: created.id,
+      invoice_no: created.invoice_no,
+    })
     toast(`Invoice ${created.invoice_no} saved!`, 'success')
 
     // Offer to open PDF
@@ -252,6 +276,11 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
     await refreshCustomers()
     initNewInvoice()
   } catch (err) {
+    logInvoices('error', 'invoices.create.failed', {
+      invoice_no: payload.invoice_no,
+      customer_id: payload.customer_id,
+      message: err.message,
+    })
     toast('Save failed: ' + err.message, 'error')
   } finally {
     _savingInvoice = false
@@ -267,10 +296,13 @@ document.getElementById('clear-form-btn').addEventListener('click', () => initNe
 
 async function loadInvoices(params = {}) {
   try {
+    logInvoices('debug', 'invoices.list.load.start', { params })
     const q = new URLSearchParams(params).toString()
     const list = await API.get('/invoices' + (q ? '?'+q : ''))
     renderInvoiceTable(list)
+    logInvoices('debug', 'invoices.list.load.success', { count: Array.isArray(list) ? list.length : 0 })
   } catch (e) {
+    logInvoices('error', 'invoices.list.load.failed', { message: e.message })
     toast('Failed to load invoices: ' + e.message, 'error')
   }
 }
@@ -324,6 +356,7 @@ document.getElementById('inv-search').addEventListener('keydown', e => {
 async function viewInvoice(id) {
   _viewInvoiceId = id
   try {
+    logInvoices('debug', 'invoices.view.start', { invoice_id: id })
     const inv = await API.get(`/invoices/${id}`)
     document.getElementById('inv-view-title').textContent = `Invoice ${inv.invoice_no} — ${inv.customer_name}`
 
@@ -379,7 +412,13 @@ async function viewInvoice(id) {
     `
 
     new bootstrap.Modal(document.getElementById('invoiceViewModal')).show()
+    logInvoices('debug', 'invoices.view.success', {
+      invoice_id: id,
+      invoice_no: inv.invoice_no,
+      item_count: Array.isArray(inv.items) ? inv.items.length : 0,
+    })
   } catch (e) {
+    logInvoices('error', 'invoices.view.failed', { invoice_id: id, message: e.message })
     toast('Could not load invoice: ' + e.message, 'error')
   }
 }
@@ -395,10 +434,13 @@ async function deleteInvoice(id, no) {
     : confirm(`Delete invoice ${no}? This cannot be undone.`)
   if (!ok) return
   try {
+    logInvoices('warn', 'invoices.delete.start', { invoice_id: id, invoice_no: no })
     await API.delete(`/invoices/${id}`)
+    logInvoices('info', 'invoices.delete.success', { invoice_id: id, invoice_no: no })
     toast(`Invoice ${no} deleted`, 'success')
     loadInvoices()
   } catch (e) {
+    logInvoices('error', 'invoices.delete.failed', { invoice_id: id, invoice_no: no, message: e.message })
     toast('Delete failed: ' + e.message, 'error')
   }
 }

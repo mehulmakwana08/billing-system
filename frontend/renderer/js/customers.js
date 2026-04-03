@@ -3,12 +3,21 @@
 let _customerModal = null
 let _savingCustomer = false
 
+function logCustomers(level, event, details = {}) {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  if (!logger || typeof logger[level] !== 'function') return
+  logger[level](event, details)
+}
+
 async function loadCustomers() {
   try {
+    logCustomers('debug', 'customers.load.start')
     const list = await refreshCustomers()
     renderCustomerTable(list)
     document.getElementById('cust-count').textContent = `Customers (${list.length})`
+    logCustomers('debug', 'customers.load.success', { count: list.length })
   } catch (e) {
+    logCustomers('error', 'customers.load.failed', { message: e.message })
     toast('Failed to load customers: ' + e.message, 'error')
   }
 }
@@ -70,6 +79,7 @@ document.getElementById('add-customer-btn').addEventListener('click', () => {
 
 async function editCustomer(id) {
   try {
+    logCustomers('debug', 'customers.edit.load.start', { customer_id: id })
     const c = await API.get(`/customers/${id}`)
     document.getElementById('cust-id').value        = c.id
     document.getElementById('cust-name').value      = c.name || ''
@@ -79,7 +89,9 @@ async function editCustomer(id) {
     document.getElementById('cust-phone').value     = c.phone || ''
     document.getElementById('cust-email').value     = c.email || ''
     openCustomerModal('Edit Customer')
+    logCustomers('debug', 'customers.edit.load.success', { customer_id: id })
   } catch (e) {
+    logCustomers('error', 'customers.edit.load.failed', { customer_id: id, message: e.message })
     toast('Could not load customer: ' + e.message, 'error')
   }
 }
@@ -110,12 +122,18 @@ async function saveCustomer() {
 
   // Basic GSTIN validation
   if (payload.gstin && !/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(payload.gstin)) {
+    logCustomers('warn', 'customers.save.validation_failed', { reason: 'gstin_format' })
     toast('GSTIN format is invalid (should be like 24XXXXX0000X1ZX)', 'error')
     return
   }
 
   const id = document.getElementById('cust-id').value
   try {
+    logCustomers('info', 'customers.save.start', {
+      customer_id: id ? Number(id) : null,
+      action: id ? 'update' : 'create',
+      name,
+    })
     _savingCustomer = true
     if (saveBtn) saveBtn.disabled = true
 
@@ -130,7 +148,17 @@ async function saveCustomer() {
     if (activeEl && typeof activeEl.blur === 'function') activeEl.blur()
     _customerModal.hide()
     await loadCustomers()
+    logCustomers('info', 'customers.save.success', {
+      customer_id: id ? Number(id) : null,
+      action: id ? 'update' : 'create',
+      name,
+    })
   } catch (e) {
+    logCustomers('error', 'customers.save.failed', {
+      customer_id: id ? Number(id) : null,
+      action: id ? 'update' : 'create',
+      message: e.message,
+    })
     toast('Save failed: ' + e.message, 'error')
   } finally {
     _savingCustomer = false
@@ -151,10 +179,13 @@ async function deleteCustomer(id, name) {
     : confirm(`Delete customer "${name}"?`)
   if (!ok) return
   try {
+    logCustomers('warn', 'customers.delete.start', { customer_id: id, name })
     await API.delete(`/customers/${id}`)
+    logCustomers('info', 'customers.delete.success', { customer_id: id, name })
     toast('Customer deleted', 'success')
     await loadCustomers()
   } catch (e) {
+    logCustomers('error', 'customers.delete.failed', { customer_id: id, name, message: e.message })
     toast('Delete failed: ' + e.message, 'error')
   }
 }

@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_file, send_from_directory, g
-import sqlite3, os, json, re, threading
+import sqlite3, os, json, re, threading, logging, time
 from datetime import datetime, date
 from urllib.parse import quote
 
@@ -30,6 +30,9 @@ CLOUD_ONLY_MODE = os.getenv('CLOUD_ONLY_MODE', '1') == '1'
 LOGIN_ONLY_MODE = os.getenv('LOGIN_ONLY_MODE', '1') == '1'
 ALLOW_SELF_REGISTER = (os.getenv('ALLOW_SELF_REGISTER', '0') == '1') and not LOGIN_ONLY_MODE
 AUTH_REQUIRED = CLOUD_ONLY_MODE or os.getenv('AUTH_REQUIRED', '0') == '1' or APP_MODE == 'cloud'
+LOG_LEVEL_NAME = _env_clean('BILLING_LOG_LEVEL', _env_clean('LOG_LEVEL', 'DEBUG')).upper()
+APP_LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.DEBUG)
+app.logger.setLevel(APP_LOG_LEVEL)
 PUBLIC_PATHS = {'/api/health', '/api/auth/login', '/api/auth/register'}
 DEFAULT_ADMIN_USERNAME = (os.getenv('DEFAULT_ADMIN_USERNAME', 'admin') or 'admin').strip().lower()
 DEFAULT_ADMIN_PASSWORD_HASH = (os.getenv('DEFAULT_ADMIN_PASSWORD_HASH') or '').strip()
@@ -74,6 +77,11 @@ def current_company_id():
 
 
 @app.before_request
+def begin_request_timer():
+    g._request_started_at = time.perf_counter()
+
+
+@app.before_request
 def attach_auth_context():
     if request.method == 'OPTIONS':
         return None
@@ -84,7 +92,20 @@ def attach_auth_context():
     try:
         load_auth_context(auth_required=AUTH_REQUIRED)
     except AuthError as exc:
+        app.logger.warning(
+            'auth_context_failed method=%s path=%s reason=%s',
+            request.method,
+            request.path,
+            str(exc),
+        )
         return jsonify({'error': 'Unauthorized', 'message': str(exc)}), 401
+    app.logger.debug(
+        'auth_context_attached method=%s path=%s company_id=%s user_id=%s',
+        request.method,
+        request.path,
+        getattr(g, 'company_id', None),
+        getattr(g, 'user_id', None),
+    )
     return None
 
 @app.after_request
@@ -95,6 +116,23 @@ def add_cors(response):
         response.headers['Vary'] = 'Origin'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
     response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
+
+    if request.path.startswith('/api'):
+        started_at = getattr(g, '_request_started_at', None)
+        duration_ms = ''
+        if started_at is not None:
+            duration_ms = f'{(time.perf_counter() - started_at) * 1000:.2f}'
+
+        app.logger.debug(
+            'api_request method=%s path=%s status=%s duration_ms=%s company_id=%s user_id=%s',
+            request.method,
+            request.path,
+            response.status_code,
+            duration_ms,
+            getattr(g, 'company_id', None),
+            getattr(g, 'user_id', None),
+        )
+
     return response
 
 @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
@@ -2411,5 +2449,13 @@ if __name__ == '__main__':
     host = os.getenv('HOST', '0.0.0.0')
     port = int(os.getenv('PORT', os.getenv('BILLING_BACKEND_PORT', '5000')))
     debug = os.getenv('FLASK_DEBUG', '0') == '1'
-    print(f"Starting Arvind Billing System Backend on {host}:{port}...")
+    app.logger.info(
+        'Starting Arvind Billing System Backend on %s:%s (debug=%s, app_mode=%s, persistence_mode=%s, cloud_only=%s)',
+        host,
+        port,
+        debug,
+        APP_MODE,
+        DB_PERSISTENCE_MODE,
+        CLOUD_ONLY_MODE,
+    )
     app.run(host=host, port=port, debug=debug, threaded=True)

@@ -5,7 +5,14 @@ let _salesPeriod  = 'monthly' // 'monthly', 'yearly', 'date', 'all'
 let _gstr1Data    = []
 let _reportPdfGenerating = false
 
+function logReports(level, event, details = {}) {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  if (!logger || typeof logger[level] !== 'function') return
+  logger[level](event, details)
+}
+
 function initReports() {
+  logReports('debug', 'reports.init.start')
   // Setup customer filter
   const cSel = document.getElementById('report-customer')
   cSel.innerHTML = '<option value="">All Customers</option>'
@@ -38,6 +45,11 @@ function initReports() {
 
   showReportView('sales')
   loadSalesData()
+  logReports('debug', 'reports.init.complete', {
+    customer_count: _customers.length,
+    active_report: _activeReport,
+    sales_period: _salesPeriod,
+  })
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -118,6 +130,7 @@ async function loadSalesData() {
   const url = `/reports/monthly${getReportParams()}`
 
   try {
+    logReports('debug', 'reports.sales.load.start', { url, period: _salesPeriod })
     const data = await API.get(url)
     const s = data.summary
 
@@ -154,7 +167,13 @@ async function loadSalesData() {
         <td class="text-end">${fmtMoney(s.grand_total)}</td>
       </tr>
     `
+    logReports('debug', 'reports.sales.load.success', {
+      invoice_count: Array.isArray(data.invoices) ? data.invoices.length : 0,
+      total_qty: parseFloat(s.total_qty || 0),
+      grand_total: s.grand_total || 0,
+    })
   } catch (e) {
+    logReports('error', 'reports.sales.load.failed', { message: e.message, period: _salesPeriod })
     toast('Report error: ' + e.message, 'error')
   }
 }
@@ -164,6 +183,7 @@ async function loadGSTR1() {
   const url = `/reports/gstr1${getReportParams()}`
 
   try {
+    logReports('debug', 'reports.gstr1.load.start', { url, period: _salesPeriod })
     _gstr1Data = await API.get(url)
     const tbody = document.querySelector('#gstr1-table tbody')
 
@@ -186,7 +206,9 @@ async function loadGSTR1() {
         <td class="text-end">${fmtMoney(r.sgst)}</td>
       </tr>
     `).join('')
+    logReports('debug', 'reports.gstr1.load.success', { count: _gstr1Data.length })
   } catch (e) {
+    logReports('error', 'reports.gstr1.load.failed', { message: e.message })
     toast('GSTR-1 error: ' + e.message, 'error')
   }
 }
@@ -196,6 +218,7 @@ async function loadHSNSummary() {
   const url = `/reports/hsn-summary${getReportParams()}`
 
   try {
+    logReports('debug', 'reports.hsn.load.start', { url, period: _salesPeriod })
     const data = await API.get(url)
     const tbody = document.querySelector('#hsn-table tbody')
 
@@ -229,7 +252,9 @@ async function loadHSNSummary() {
         <td></td>
       </tr>
     `
+    logReports('debug', 'reports.hsn.load.success', { count: data.length })
   } catch (e) {
+    logReports('error', 'reports.hsn.load.failed', { message: e.message })
     toast('HSN summary error: ' + e.message, 'error')
   }
 }
@@ -237,6 +262,7 @@ async function loadHSNSummary() {
 // ── CSV Export ────────────────────────────────────────────────────────────────
 document.getElementById('gstr1-export-btn').addEventListener('click', () => {
   if (!_gstr1Data || _gstr1Data.length === 0) {
+    logReports('warn', 'reports.gstr1.export.skipped', { reason: 'no_data' })
     toast('No data to export', 'error')
     return
   }
@@ -261,6 +287,7 @@ document.getElementById('gstr1-export-btn').addEventListener('click', () => {
   a.download = fname
   a.click()
   URL.revokeObjectURL(url)
+  logReports('info', 'reports.gstr1.export.success', { filename: fname, row_count: _gstr1Data.length })
   toast(`Exported ${fname}`, 'success')
 })
 
@@ -272,6 +299,7 @@ document.getElementById('report-bill-pdf-btn')?.addEventListener('click', async 
   const url = `/reports/sales-pdf${getReportParams()}`
   
   try {
+    logReports('info', 'reports.sales_pdf.start', { period: _salesPeriod })
     _reportPdfGenerating = true
     if (pdfBtn) pdfBtn.disabled = true
 
@@ -283,16 +311,23 @@ document.getElementById('report-bill-pdf-btn')?.addEventListener('click', async 
     }
     if (String(target).startsWith('http')) {
       window.open(target, '_blank')
+      logReports('info', 'reports.sales_pdf.success', { mode: 'url' })
       return
     }
     if (window.electronAPI) {
       const result = await window.electronAPI.openPDF(target)
       if (!result.success) toast('Could not open PDF: ' + result.error, 'error')
+      logReports(result.success ? 'info' : 'warn', 'reports.sales_pdf.desktop_result', {
+        success: Boolean(result.success),
+        message: result.error || '',
+      })
     } else {
       // Browser fallback - Since it doesn't stream the PDF directly, just alert
       toast('PDF saved to: ' + target, 'success')
+      logReports('info', 'reports.sales_pdf.success', { mode: 'path' })
     }
   } catch (e) {
+    logReports('error', 'reports.sales_pdf.failed', { message: e.message })
     toast('Failed to generate PDF: ' + e.message, 'error')
   } finally {
     _reportPdfGenerating = false

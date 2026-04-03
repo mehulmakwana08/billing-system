@@ -2,8 +2,16 @@
 
 let _revenueChart = null
 
+function logDashboard(level, event, details = {}) {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  if (!logger || typeof logger[level] !== 'function') return
+  logger[level](event, details)
+}
+
 async function loadDashboard() {
   try {
+    const startedAt = Date.now()
+    logDashboard('debug', 'dashboard.load.start')
     const d = await API.get('/dashboard')
 
     // Stat cards
@@ -93,8 +101,15 @@ async function loadDashboard() {
       el.addEventListener('click', e => { e.preventDefault(); showPage(el.dataset.page) })
     })
 
+    logDashboard('debug', 'dashboard.load.success', {
+      duration_ms: Date.now() - startedAt,
+      month_invoices: d.month_invoices,
+      total_customers: d.total_customers,
+      recent_invoices: Array.isArray(d.recent_invoices) ? d.recent_invoices.length : 0,
+    })
+
   } catch (e) {
-    console.error('Dashboard error:', e)
+    logDashboard('error', 'dashboard.load.failed', { message: e.message, stack: e.stack })
     toast('Could not load dashboard: ' + e.message, 'error')
   }
 }

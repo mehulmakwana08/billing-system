@@ -3,7 +3,17 @@
 let _selectedLedgerCustomer = null
 let _recordingLedgerPayment = false
 
+function logLedger(level, event, details = {}) {
+  const logger = (typeof window !== 'undefined' && window.AppLogger) ? window.AppLogger : null
+  if (!logger || typeof logger[level] !== 'function') return
+  logger[level](event, details)
+}
+
 async function loadLedger(customerId) {
+  logLedger('debug', 'ledger.load.start', {
+    customer_id: customerId || null,
+    selected_customer_id: _selectedLedgerCustomer || null,
+  })
   // Populate customer dropdown
   const sel = document.getElementById('ledger-customer')
   if (sel.options.length <= 1) {
@@ -26,6 +36,7 @@ async function loadLedger(customerId) {
   } else {
     clearLedgerView()
   }
+  logLedger('debug', 'ledger.load.complete', { selected_customer_id: _selectedLedgerCustomer || null })
 }
 
 function clearLedgerView() {
@@ -40,10 +51,17 @@ function clearLedgerView() {
 async function fetchLedgerData(cid) {
   if (!cid) { clearLedgerView(); return }
   try {
+    logLedger('debug', 'ledger.fetch.start', { customer_id: Number(cid) })
     const data = await API.get(`/ledger/${cid}`)
     renderLedgerSummary(data)
     renderLedgerTable(data.entries)
+    logLedger('debug', 'ledger.fetch.success', {
+      customer_id: Number(cid),
+      entries: Array.isArray(data.entries) ? data.entries.length : 0,
+      balance: data.balance || 0,
+    })
   } catch (e) {
+    logLedger('error', 'ledger.fetch.failed', { customer_id: Number(cid), message: e.message })
     toast('Failed to load ledger: ' + e.message, 'error')
   }
 }
@@ -128,6 +146,11 @@ async function recordLedgerPayment() {
   const ref = document.getElementById('ledger-pay-ref').value.trim()
 
   try {
+    logLedger('info', 'ledger.payment.start', {
+      customer_id: Number(cid),
+      amount,
+      mode,
+    })
     _recordingLedgerPayment = true
     if (recordBtn) recordBtn.disabled = true
 
@@ -145,7 +168,18 @@ async function recordLedgerPayment() {
     document.getElementById('ledger-pay-ref').value = ''
     // Refresh ledger
     await fetchLedgerData(cid)
+    logLedger('info', 'ledger.payment.success', {
+      customer_id: Number(cid),
+      amount,
+      mode,
+    })
   } catch (e) {
+    logLedger('error', 'ledger.payment.failed', {
+      customer_id: Number(cid),
+      amount,
+      mode,
+      message: e.message,
+    })
     toast('Failed to record payment: ' + e.message, 'error')
   } finally {
     _recordingLedgerPayment = false

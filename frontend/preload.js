@@ -24,4 +24,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   backendOrigin: BACKEND_ORIGIN,
   getBackendOrigin: () => BACKEND_ORIGIN,
+  log: (level, event, details) => ipcRenderer.send('renderer-log', { level, event, details }),
+  getLogPath: () => ipcRenderer.invoke('get-log-path'),
 })
