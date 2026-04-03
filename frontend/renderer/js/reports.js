@@ -3,6 +3,7 @@
 let _activeReport = 'sales' // 'sales', 'gstr1', 'hsn'
 let _salesPeriod  = 'monthly' // 'monthly', 'yearly', 'date', 'all'
 let _gstr1Data    = []
+let _reportPdfGenerating = false
 
 function initReports() {
   // Setup customer filter
@@ -247,7 +248,7 @@ document.getElementById('gstr1-export-btn').addEventListener('click', () => {
     r.qty, r.rate, r.taxable_amount, r.cgst, r.sgst, r.igst
   ])
   const csv = [headers, ...rows]
-    .map(row => row.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(','))
+    .map(row => row.map(v => `"${String(v ?? '').replace(/"/g,'""')}"`).join(','))
     .join('\n')
 
   const fname = `GSTR1_${_salesPeriod}_Export.csv`
@@ -265,9 +266,15 @@ document.getElementById('gstr1-export-btn').addEventListener('click', () => {
 
 // ── Consolidated Bill PDF ──────────────────────────────────────────────────
 document.getElementById('report-bill-pdf-btn')?.addEventListener('click', async () => {
+  if (_reportPdfGenerating) return
+
+  const pdfBtn = document.getElementById('report-bill-pdf-btn')
   const url = `/reports/sales-pdf${getReportParams()}`
   
   try {
+    _reportPdfGenerating = true
+    if (pdfBtn) pdfBtn.disabled = true
+
     toast('Generating Report PDF...', 'info')
     const data = await API.get(url)
     const target = data.path || data.pdf_url
@@ -287,6 +294,9 @@ document.getElementById('report-bill-pdf-btn')?.addEventListener('click', async 
     }
   } catch (e) {
     toast('Failed to generate PDF: ' + e.message, 'error')
+  } finally {
+    _reportPdfGenerating = false
+    if (pdfBtn) pdfBtn.disabled = false
   }
 })
 

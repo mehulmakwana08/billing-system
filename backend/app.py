@@ -1994,11 +1994,18 @@ def _build_sales_report_payload(period_type_override=None):
     
     date_filter, date_params, period_str = get_date_filter_ext(request, period_type_override)
     base_params = [company_id] + list(date_params)
+
+    # SQLite uses GROUP_CONCAT while Postgres uses STRING_AGG.
+    product_names_expr = (
+        "(SELECT STRING_AGG(product_name::text, ', ') FROM invoice_items WHERE invoice_id = i.id)"
+        if USE_POSTGRES
+        else "(SELECT GROUP_CONCAT(product_name, ', ') FROM invoice_items WHERE invoice_id = i.id)"
+    )
     
     query = f"""
         SELECT i.*, 
                (SELECT COALESCE(SUM(qty), 0) FROM invoice_items WHERE invoice_id = i.id) AS total_qty,
-               (SELECT GROUP_CONCAT(product_name, ', ') FROM invoice_items WHERE invoice_id = i.id) AS product_names
+               {product_names_expr} AS product_names
         FROM invoices i
         WHERE i.company_id=? AND {date_filter}
     """
