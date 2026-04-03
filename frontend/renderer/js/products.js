@@ -1,6 +1,7 @@
 /* products.js */
 
 let _productModal = null
+let _savingProduct = false
 
 async function loadProducts() {
   try {
@@ -71,7 +72,10 @@ async function editProduct(id) {
 }
 
 // ── Save product ──────────────────────────────────────────────────────────────
-document.getElementById('save-product-btn').addEventListener('click', async () => {
+async function saveProduct() {
+  if (_savingProduct) return
+
+  const saveBtn = document.getElementById('save-product-btn')
   const name = document.getElementById('prod-name').value.trim()
   if (!name) { toast('Product name is required', 'error'); return }
 
@@ -85,6 +89,9 @@ document.getElementById('save-product-btn').addEventListener('click', async () =
 
   const id = document.getElementById('prod-id').value
   try {
+    _savingProduct = true
+    if (saveBtn) saveBtn.disabled = true
+
     if (id) {
       await API.put(`/products/${id}`, payload)
       toast('Product updated', 'success')
@@ -92,11 +99,22 @@ document.getElementById('save-product-btn').addEventListener('click', async () =
       await API.post('/products', payload)
       toast('Product added', 'success')
     }
+    const activeEl = document.activeElement
+    if (activeEl && typeof activeEl.blur === 'function') activeEl.blur()
     _productModal.hide()
     await loadProducts()
   } catch (e) {
     toast('Save failed: ' + e.message, 'error')
+  } finally {
+    _savingProduct = false
+    if (saveBtn) saveBtn.disabled = false
   }
+}
+
+document.getElementById('save-product-btn').addEventListener('click', saveProduct)
+document.getElementById('product-form').addEventListener('submit', (e) => {
+  e.preventDefault()
+  saveProduct()
 })
 
 // ── Delete product ─────────────────────────────────────────────────────────────

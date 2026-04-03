@@ -1,6 +1,7 @@
 /* ledger.js — Customer Credit & Debit Ledger */
 
 let _selectedLedgerCustomer = null
+let _recordingLedgerPayment = false
 
 async function loadLedger(customerId) {
   // Populate customer dropdown
@@ -112,7 +113,10 @@ document.getElementById('ledger-customer').addEventListener('change', function (
 })
 
 // ── Record Payment ──────────────────────────────────────────────────────────
-document.getElementById('ledger-payment-btn').addEventListener('click', async () => {
+async function recordLedgerPayment() {
+  if (_recordingLedgerPayment) return
+
+  const recordBtn = document.getElementById('ledger-payment-btn')
   const cid = document.getElementById('ledger-customer').value
   if (!cid) { toast('Please select a customer first', 'error'); return }
 
@@ -124,6 +128,9 @@ document.getElementById('ledger-payment-btn').addEventListener('click', async ()
   const ref = document.getElementById('ledger-pay-ref').value.trim()
 
   try {
+    _recordingLedgerPayment = true
+    if (recordBtn) recordBtn.disabled = true
+
     await API.post('/ledger/payment', {
       customer_id: parseInt(cid),
       amount,
@@ -140,5 +147,13 @@ document.getElementById('ledger-payment-btn').addEventListener('click', async ()
     await fetchLedgerData(cid)
   } catch (e) {
     toast('Failed to record payment: ' + e.message, 'error')
+  } finally {
+    _recordingLedgerPayment = false
+    if (recordBtn) recordBtn.disabled = false
   }
+}
+
+document.getElementById('ledger-payment-form').addEventListener('submit', (e) => {
+  e.preventDefault()
+  recordLedgerPayment()
 })

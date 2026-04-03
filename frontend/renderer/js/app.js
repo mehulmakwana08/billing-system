@@ -120,14 +120,23 @@ async function authLogin() {
   try {
     const res = await API.post('/auth/login', { username, password })
     API.setToken(res.token)
+
+    // Keep UI locked while initial datasets are fetched to avoid empty New Invoice dropdowns.
+    _isAuthenticated = true
+    setAuthLocked(true)
+    setSyncStatus('Loading data...', 'info')
+
+    await initializeAuthorizedSession()
     refreshAuthUI(res.user)
+
     if (document.activeElement && typeof document.activeElement.blur === 'function') {
       document.activeElement.blur()
     }
     getAuthModal().hide()
-    await initializeAuthorizedSession()
     toast('Signed in', 'success')
   } catch (err) {
+    API.clearToken()
+    refreshAuthUI(null)
     toast('Login failed: ' + err.message, 'error')
   }
 }

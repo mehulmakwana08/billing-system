@@ -1,6 +1,7 @@
 /* customers.js */
 
 let _customerModal = null
+let _savingCustomer = false
 
 async function loadCustomers() {
   try {
@@ -91,7 +92,10 @@ document.getElementById('cust-gstin-inp').addEventListener('input', function () 
 })
 
 // ── Save customer ─────────────────────────────────────────────────────────────
-document.getElementById('save-customer-btn').addEventListener('click', async () => {
+async function saveCustomer() {
+  if (_savingCustomer) return
+
+  const saveBtn = document.getElementById('save-customer-btn')
   const name = document.getElementById('cust-name').value.trim()
   if (!name) { toast('Customer name is required', 'error'); return }
 
@@ -112,6 +116,9 @@ document.getElementById('save-customer-btn').addEventListener('click', async () 
 
   const id = document.getElementById('cust-id').value
   try {
+    _savingCustomer = true
+    if (saveBtn) saveBtn.disabled = true
+
     if (id) {
       await API.put(`/customers/${id}`, payload)
       toast('Customer updated', 'success')
@@ -119,11 +126,22 @@ document.getElementById('save-customer-btn').addEventListener('click', async () 
       await API.post('/customers', payload)
       toast('Customer added', 'success')
     }
+    const activeEl = document.activeElement
+    if (activeEl && typeof activeEl.blur === 'function') activeEl.blur()
     _customerModal.hide()
     await loadCustomers()
   } catch (e) {
     toast('Save failed: ' + e.message, 'error')
+  } finally {
+    _savingCustomer = false
+    if (saveBtn) saveBtn.disabled = false
   }
+}
+
+document.getElementById('save-customer-btn').addEventListener('click', saveCustomer)
+document.getElementById('customer-form').addEventListener('submit', (e) => {
+  e.preventDefault()
+  saveCustomer()
 })
 
 // ── Delete customer ───────────────────────────────────────────────────────────
