@@ -3,6 +3,7 @@
 let _itemRowId = 0
 let _viewInvoiceId = null
 let _sellerState = '24'
+let _savingInvoice = false
 
 // ════════════════════════════════════════════════════════════════
 //  NEW INVOICE
@@ -144,18 +145,27 @@ function recalcRow(id) {
 function updateTotals() {
   let taxable = 0, cgst = 0, sgst = 0, igst = 0
   const buyer = document.getElementById('cust-state').value || '24'
+  const isInterState = _sellerState !== buyer
 
   document.querySelectorAll('#items-body tr').forEach(row => {
-    taxable += parseFloat(row.querySelector('.item-taxable')?.textContent || 0)
-    cgst    += parseFloat(row.querySelector('.item-cgst-val')?.textContent || 0)
-    sgst    += parseFloat(row.querySelector('.item-sgst-val')?.textContent || 0)
+    const rowTaxable = parseFloat(row.querySelector('.item-taxable')?.textContent || 0)
+    const rowCgst = parseFloat(row.querySelector('.item-cgst-val')?.textContent || 0)
+    const rowSgst = parseFloat(row.querySelector('.item-sgst-val')?.textContent || 0)
+    const rowTotal = parseFloat(row.querySelector('.item-total-val')?.textContent || 0)
+
+    taxable += rowTaxable
+    if (isInterState) {
+      igst += Math.max(0, rowTotal - rowTaxable)
+    } else {
+      cgst += rowCgst
+      sgst += rowSgst
+    }
   })
 
-  // If inter-state, move to IGST
-  if (_sellerState !== buyer) {
-    igst = Math.round((cgst + sgst) * 100) / 100
-    cgst = 0; sgst = 0
-  }
+  taxable = Math.round(taxable * 100) / 100
+  cgst = Math.round(cgst * 100) / 100
+  sgst = Math.round(sgst * 100) / 100
+  igst = Math.round(igst * 100) / 100
 
   const grand = Math.round((taxable + cgst + sgst + igst) * 100) / 100
 
@@ -196,6 +206,9 @@ function collectItems() {
 // ── Form submit ───────────────────────────────────────────────────────────────
 document.getElementById('invoice-form').addEventListener('submit', async (e) => {
   e.preventDefault()
+  if (_savingInvoice) return
+
+  const submitBtn = document.querySelector('#invoice-form button[type="submit"]')
   const custSel = document.getElementById('customer-select')
   if (!custSel.value) { toast('Please select a customer', 'error'); return }
 
@@ -221,6 +234,9 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
   }
 
   try {
+    _savingInvoice = true
+    if (submitBtn) submitBtn.disabled = true
+
     const created = await API.post('/invoices', payload)
     toast(`Invoice ${created.invoice_no} saved!`, 'success')
 
@@ -237,6 +253,9 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
     initNewInvoice()
   } catch (err) {
     toast('Save failed: ' + err.message, 'error')
+  } finally {
+    _savingInvoice = false
+    if (submitBtn) submitBtn.disabled = false
   }
 })
 
