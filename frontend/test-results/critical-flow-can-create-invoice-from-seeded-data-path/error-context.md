@@ -1,0 +1,177 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - navigation [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: 
+        - generic [ref=e6]: Arvind Billing
+      - list [ref=e7]:
+        - listitem [ref=e8]:
+          - link " Dashboard" [ref=e9] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e10]: 
+            - generic [ref=e11]: Dashboard
+        - listitem [ref=e12]:
+          - link " New Invoice" [ref=e13] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e14]: 
+            - generic [ref=e15]: New Invoice
+        - listitem [ref=e16]:
+          - link " Invoices" [ref=e17] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e18]: 
+            - generic [ref=e19]: Invoices
+        - listitem [ref=e20]:
+          - link " Customers" [ref=e21] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e22]: 
+            - generic [ref=e23]: Customers
+        - listitem [ref=e24]:
+          - link " Products" [ref=e25] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e26]: 
+            - generic [ref=e27]: Products
+        - listitem [ref=e28]
+        - listitem [ref=e29]:
+          - link " Ledger" [ref=e30] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e31]: 
+            - generic [ref=e32]: Ledger
+        - listitem [ref=e33]:
+          - link " Reports" [ref=e34] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e35]: 
+            - generic [ref=e36]: Reports
+        - listitem [ref=e37]:
+          - link " Settings" [ref=e38] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e39]: 
+            - generic [ref=e40]: Settings
+      - generic [ref=e41]: "GSTIN: 24AAIFC6554D1ZN"
+    - generic [ref=e42]:
+      - generic [ref=e43]:
+        - heading "New Invoice" [level=5] [ref=e44]
+        - generic [ref=e45]:
+          - generic [ref=e46]: admin (Company 1)
+          - generic [ref=e47]: Connected
+          - button "Logout" [ref=e48] [cursor=pointer]
+      - text:    % 
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e53]:
+            - generic [ref=e54]: Invoice Details
+            - generic [ref=e56]:
+              - generic [ref=e57]:
+                - generic [ref=e58]: Invoice No *
+                - textbox [ref=e59]: GT/2026/00031
+              - generic [ref=e60]:
+                - generic [ref=e61]: Date *
+                - textbox [ref=e62]: 2026-04-03
+              - generic [ref=e63]:
+                - generic [ref=e64]: Invoice Type
+                - combobox [ref=e65]:
+                  - option "TAX INVOICE" [selected]
+                  - option "Debit Memo TAX INVOICE Original"
+                  - option "CREDIT NOTE"
+                  - option "PROFORMA INVOICE"
+              - generic [ref=e66]:
+                - generic [ref=e67]: Notes
+                - textbox [ref=e68]
+          - generic [ref=e70]:
+            - generic [ref=e71]: Bill To
+            - generic [ref=e73]:
+              - generic [ref=e74]:
+                - generic [ref=e75]: Customer *
+                - combobox [ref=e76]:
+                  - option "— Select Customer —"
+                  - option "Chamunda Bangles" [selected]
+                  - option "test"
+              - generic [ref=e77]:
+                - generic [ref=e78]: Address
+                - textbox [ref=e79]: SAYLA, NEAR BUS STOP, SAYLA, SAYLA, SAYLA, Surendranagar - 363430
+              - generic [ref=e80]:
+                - generic [ref=e81]: GSTIN
+                - textbox [ref=e82]: 24BGFPM0677R1ZT
+              - generic [ref=e83]:
+                - generic [ref=e84]: State Code
+                - textbox [ref=e85]: "24"
+        - generic [ref=e86]:
+          - generic [ref=e87]:
+            - generic [ref=e88]: Line Items
+            - button "+ Add Item" [ref=e89] [cursor=pointer]:
+              - generic [ref=e90]: +
+              - text: Add Item
+          - table [ref=e93]:
+            - rowgroup [ref=e94]:
+              - row "Product HSN Qty Rate (₹) GST % Taxable (₹) CGST (₹) SGST (₹) Total (₹)" [ref=e95]:
+                - columnheader "Product" [ref=e96]
+                - columnheader "HSN" [ref=e97]
+                - columnheader "Qty" [ref=e98]
+                - columnheader "Rate (₹)" [ref=e99]
+                - columnheader "GST %" [ref=e100]
+                - columnheader "Taxable (₹)" [ref=e101]
+                - columnheader "CGST (₹)" [ref=e102]
+                - columnheader "SGST (₹)" [ref=e103]
+                - columnheader "Total (₹)" [ref=e104]
+                - columnheader [ref=e105]
+            - rowgroup [ref=e106]:
+              - row "Bangles Acrylic Paip 3906 1 0 18% 240.00 21.60 21.60 283.20 " [ref=e107]:
+                - cell "Bangles Acrylic Paip" [ref=e108]:
+                  - combobox [ref=e109]:
+                    - option "— Select Product —"
+                    - option "Bangles Acrylic Paip" [selected]
+                - cell "3906" [ref=e110]:
+                  - textbox [ref=e111]: "3906"
+                - cell "1" [ref=e112]:
+                  - spinbutton [ref=e113]: "2"
+                - cell "0" [ref=e114]:
+                  - spinbutton [ref=e115]: "120"
+                - cell "18%" [ref=e116]:
+                  - combobox [ref=e117]:
+                    - option "0%"
+                    - option "5%"
+                    - option "12%"
+                    - option "18%" [selected]
+                    - option "28%"
+                - cell "240.00" [ref=e118]
+                - cell "21.60" [ref=e119]
+                - cell "21.60" [ref=e120]
+                - cell "283.20" [ref=e121]
+                - cell "" [ref=e122]:
+                  - button "" [ref=e123] [cursor=pointer]:
+                    - generic [ref=e124]: 
+        - generic [ref=e125]:
+          - generic [ref=e127]:
+            - generic [ref=e128]: Amount in Words
+            - paragraph [ref=e130]: Two Hundred Eighty Three Only
+          - table [ref=e134]:
+            - rowgroup [ref=e135]:
+              - row "Taxable Amount ₹ 240.00" [ref=e136]:
+                - cell "Taxable Amount" [ref=e137]
+                - cell "₹ 240.00" [ref=e138]
+              - row "CGST ₹ 21.60" [ref=e139]:
+                - cell "CGST" [ref=e140]
+                - cell "₹ 21.60" [ref=e141]
+              - row "SGST ₹ 21.60" [ref=e142]:
+                - cell "SGST" [ref=e143]
+                - cell "₹ 21.60" [ref=e144]
+              - row "IGST ₹ 0.00" [ref=e145]:
+                - cell "IGST" [ref=e146]
+                - cell "₹ 0.00" [ref=e147]
+              - row "GRAND TOTAL ₹ 283.20" [ref=e148]:
+                - cell "GRAND TOTAL" [ref=e149]:
+                  - strong [ref=e150]: GRAND TOTAL
+                - cell "₹ 283.20" [ref=e151]:
+                  - strong [ref=e152]: ₹ 283.20
+        - generic [ref=e153]:
+          - button " Save Invoice" [ref=e154] [cursor=pointer]:
+            - generic [ref=e155]: 
+            - text: Save Invoice
+          - button " Clear" [ref=e156] [cursor=pointer]:
+            - generic [ref=e157]: 
+            - text: Clear
+      - text:   + +      
+  - text: 
+```

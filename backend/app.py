@@ -1571,15 +1571,22 @@ def create_invoice():
         total_gst = inv_data['cgst'] + inv_data['sgst'] + inv_data['igst']
         inv_data['gst_words'] = num_to_words(round(total_gst))
 
-        try:
-            if APP_MODE == 'cloud':
+        pdf_warning = None
+        pdf_url = ''
+        sync_status = 'pending'
+        if APP_MODE == 'cloud':
+            try:
                 pdf_url = generate_pdf(inv_data, mode='cloud')
                 sync_status = 'synced'
-            else:
+            except Exception as exc:
+                pdf_warning = str(exc)
+                app.logger.warning('Cloud PDF generation skipped for invoice %s: %s', invoice_no, exc)
+        else:
+            try:
                 pdf_url = generate_pdf(inv_data, mode='local')
-                sync_status = 'pending'
-        except Exception as exc:
-            raise RuntimeError(f'PDF generation failed: {exc}') from exc
+            except Exception as exc:
+                pdf_warning = str(exc)
+                app.logger.warning('Local PDF generation skipped for invoice %s: %s', invoice_no, exc)
 
         conn.execute(
             """
@@ -1607,6 +1614,8 @@ def create_invoice():
         result['items'] = [dict(i) for i in items_rows]
         result['credit_applied'] = credit_applied
         result['remaining_due'] = remaining_due
+        if pdf_warning:
+            result['pdf_warning'] = pdf_warning
         return jsonify(result), 201
     except ValueError as exc:
         conn.rollback()
@@ -1756,6 +1765,32 @@ def invoice_pdf_path(iid):
     inv_data['gst_words'] = num_to_words(round(total_gst))
 
     safe_no = inv_data['invoice_no'].replace('/', '_')
+
+    if APP_MODE == 'cloud':
+        try:
+            pdf_url = generate_pdf(inv_data, mode='cloud')
+            upd_conn = get_db()
+            upd_conn.execute(
+                """
+                UPDATE invoices
+                SET pdf_url=?, sync_status=?, updated_at=datetime('now')
+                WHERE id=? AND company_id=?
+                """,
+                (pdf_url, 'synced', iid, company_id),
+            )
+            upd_conn.commit()
+            upd_conn.close()
+            return jsonify({'path': pdf_url, 'pdf_url': pdf_url, 'filename': f"Invoice_{safe_no}.pdf"})
+        except Exception as exc:
+            app.logger.warning('Cloud PDF URL unavailable for invoice %s: %s', inv_data.get('invoice_no'), exc)
+            fallback_url = f"{request.host_url.rstrip('/')}/api/invoices/{iid}/pdf"
+            return jsonify({
+                'path': fallback_url,
+                'pdf_url': fallback_url,
+                'filename': f"Invoice_{safe_no}.pdf",
+                'warning': f'cloud pdf unavailable: {exc}',
+            })
+
     pdf_path = os.path.join(BILLS_DIR, f"Invoice_{safe_no}.pdf")
     generate_invoice_pdf(inv_data, pdf_path)
 

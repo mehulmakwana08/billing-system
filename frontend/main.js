@@ -2,14 +2,17 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
+const https = require('https')
 const fs = require('fs')
 
 const BACKEND_HOST = process.env.BILLING_BACKEND_HOST || '127.0.0.1'
 const BACKEND_PORT = Number.parseInt(process.env.BILLING_BACKEND_PORT || '5000', 10)
-const RAW_BACKEND_ORIGIN = process.env.BILLING_BACKEND_ORIGIN || `http://${BACKEND_HOST}:${BACKEND_PORT}`
+const CLOUD_ONLY_MODE = process.env.BILLING_CLOUD_ONLY_MODE !== '0'
+const DEFAULT_LIVE_BACKEND_ORIGIN = process.env.BILLING_LIVE_BACKEND_ORIGIN || 'https://billing-system-root.vercel.app'
+const RAW_BACKEND_ORIGIN = process.env.BILLING_BACKEND_ORIGIN ||
+  (CLOUD_ONLY_MODE ? DEFAULT_LIVE_BACKEND_ORIGIN : `http://${BACKEND_HOST}:${BACKEND_PORT}`)
 const BACKEND_ORIGIN = RAW_BACKEND_ORIGIN.replace(/\/+$/, '')
 const HEALTH_URL = `${BACKEND_ORIGIN}/api/health`
-const CLOUD_ONLY_MODE = process.env.BILLING_CLOUD_ONLY_MODE !== '0'
 const USE_EXTERNAL_BACKEND = CLOUD_ONLY_MODE || process.env.BILLING_USE_EXTERNAL_BACKEND === '1'
 
 let mainWindow
@@ -29,7 +32,8 @@ app.on('second-instance', () => {
 
 function probeFlask(timeoutMs = 1000) {
   return new Promise(resolve => {
-    const req = http.get(HEALTH_URL, res => {
+    const client = HEALTH_URL.startsWith('https://') ? https : http
+    const req = client.get(HEALTH_URL, res => {
       res.resume()
       resolve(res.statusCode === 200)
     })
@@ -71,7 +75,8 @@ function startFlask() {
 
 // ── Wait for Flask ready ─────────────────────────────────────────────────────
 function waitForFlask(callback, retries = 40, externalOnly = false) {
-  const req = http.get(HEALTH_URL, res => {
+  const client = HEALTH_URL.startsWith('https://') ? https : http
+  const req = client.get(HEALTH_URL, res => {
     if (res.statusCode === 200) {
       console.log(`[Electron] Backend is ready at ${BACKEND_ORIGIN}`)
       callback()
@@ -90,9 +95,10 @@ function waitForFlask(callback, retries = 40, externalOnly = false) {
         console.error('[Electron] External backend is unavailable')
         dialog.showErrorBox(
           'Backend Error',
-          'Desktop is running in cloud-only mode and external backend is required.\n\n' +
+          'Desktop is running in cloud-only mode and an external backend is required.\n\n' +
           `Expected backend URL:\n  ${HEALTH_URL}\n\n` +
-          'Start backend/app.py first, then relaunch desktop.'
+          'Check your internet connection and backend availability, then relaunch desktop.\n' +
+          'You can also override the backend using BILLING_BACKEND_ORIGIN.'
         )
       } else {
         console.error('[Electron] Backend failed to start!')

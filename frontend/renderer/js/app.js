@@ -133,17 +133,18 @@ async function authLogin() {
     setAuthLocked(true)
     setSyncStatus('Loading data...', 'info')
 
-    await initializeAuthorizedSession()
-    refreshAuthUI(res.user)
-
     if (document.activeElement && typeof document.activeElement.blur === 'function') {
       document.activeElement.blur()
     }
     getAuthModal().hide()
+
+    await initializeAuthorizedSession()
+    refreshAuthUI(res.user)
     toast('Signed in', 'success')
   } catch (err) {
     API.clearToken()
     refreshAuthUI(null)
+    getAuthModal().show()
     toast('Login failed: ' + err.message, 'error')
   } finally {
     _authLoginInFlight = false
@@ -358,7 +359,13 @@ async function openInvoicePDF(invoiceId) {
     }
 
     if (String(target).startsWith('http')) {
-      window.open(target, '_blank')
+      const apiRoot = String(API.getBaseUrl() || '').replace(/\/api$/, '')
+      const isProtectedApiUrl = apiRoot && String(target).startsWith(`${apiRoot}/api/`)
+      if (isProtectedApiUrl) {
+        await openInvoicePDFInBrowser(invoiceId, data.filename)
+      } else {
+        window.open(target, '_blank')
+      }
       return
     }
 
