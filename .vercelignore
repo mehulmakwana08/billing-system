@@ -1,0 +1,22 @@
+# Exclude desktop/E2E artifacts from serverless bundle
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/e2e
+frontend/playwright.config.js
+
+# Exclude local runtime and backup databases
+backend/billing.db
+backend/billing_backup_*.db
+backend/cloud_test.db
+
+# Exclude Python cache/tests not needed at runtime
+backend/__pycache__
+backend/tests
+backend/test_*.py
+backend/test_api*.py
+
+# Workspace metadata
+.agents
+.memories
+.vscode
