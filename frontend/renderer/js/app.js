@@ -6,6 +6,7 @@ let _products  = []   // cached product list
 let _company   = {}   // cached company settings
 let _authModal = null
 let _isAuthenticated = false
+let _authLoginInFlight = false
 
 function setAuthLocked(locked) {
   const layout = document.querySelector('.layout')
@@ -111,13 +112,19 @@ async function initializeAuthorizedSession() {
 }
 
 async function authLogin() {
+  if (_authLoginInFlight) return
+
   const username = document.getElementById('login-username').value.trim()
   const password = document.getElementById('login-password').value
+  const loginBtn = document.getElementById('login-btn')
   if (!username || !password) {
     toast('Enter username and password', 'error')
     return
   }
   try {
+    _authLoginInFlight = true
+    if (loginBtn) loginBtn.disabled = true
+
     const res = await API.post('/auth/login', { username, password })
     API.setToken(res.token)
 
@@ -138,6 +145,9 @@ async function authLogin() {
     API.clearToken()
     refreshAuthUI(null)
     toast('Login failed: ' + err.message, 'error')
+  } finally {
+    _authLoginInFlight = false
+    if (loginBtn) loginBtn.disabled = false
   }
 }
 
