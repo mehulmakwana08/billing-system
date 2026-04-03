@@ -12,7 +12,21 @@ function envInt(value, fallback) {
   return parsed
 }
 
-const LOG_LEVEL = String(process.env.BILLING_LOG_LEVEL || 'debug').toLowerCase()
+function normalizeLogLevel(value, fallback = 'info') {
+  const key = String(value || '').trim().toLowerCase()
+  const aliases = {
+    debug: 'debug',
+    info: 'info',
+    warn: 'warn',
+    warning: 'warn',
+    error: 'error',
+    err: 'error',
+    erroe: 'error',
+  }
+  return aliases[key] || fallback
+}
+
+const LOG_LEVEL = normalizeLogLevel(process.env.BILLING_LOG_LEVEL || 'debug', 'debug')
 const LOG_RETENTION_DAYS = envInt(process.env.BILLING_LOG_RETENTION_DAYS || '7', 7)
 const LOG_MAX_TOTAL_SIZE = envInt(process.env.BILLING_LOG_MAX_TOTAL_SIZE_BYTES || `${50 * 1024 * 1024}`, 50 * 1024 * 1024)
 const LOG_MAX_FILE_SIZE = envInt(process.env.BILLING_LOG_MAX_SIZE_BYTES || `${5 * 1024 * 1024}`, 5 * 1024 * 1024)
@@ -107,7 +121,8 @@ function cleanupOldLogs(logDir) {
 }
 
 function logEvent(level, eventName, details) {
-  const logger = typeof log[level] === 'function' ? log[level] : log.info
+  const normalizedLevel = normalizeLogLevel(level, 'info')
+  const logger = typeof log[normalizedLevel] === 'function' ? log[normalizedLevel] : log.info
   if (details === undefined) {
     logger.call(log, eventName)
     return
@@ -397,7 +412,7 @@ ipcMain.handle('confirm', async (event, { message, detail }) => {
 })
 
 ipcMain.on('renderer-log', (_event, payload = {}) => {
-  const level = String(payload.level || 'info').toLowerCase()
+  const level = normalizeLogLevel(payload.level || 'info', 'info')
   const eventName = String(payload.event || 'event')
   const details = payload.details || {}
   logEvent(level, `renderer.${eventName}`, details)

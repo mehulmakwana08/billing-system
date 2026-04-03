@@ -39,8 +39,18 @@ const AppLogger = (() => {
   }
 
   function normalizeLevel(level) {
-    const candidate = String(level || 'info').toLowerCase()
-    return VALID_LEVELS.has(candidate) ? candidate : 'info'
+    const candidate = String(level || 'info').trim().toLowerCase()
+    const aliases = {
+      debug: 'debug',
+      info: 'info',
+      warn: 'warn',
+      warning: 'warn',
+      error: 'error',
+      err: 'error',
+      erroe: 'error',
+    }
+    const normalized = aliases[candidate] || 'info'
+    return VALID_LEVELS.has(normalized) ? normalized : 'info'
   }
 
   function emit(level, event, details) {

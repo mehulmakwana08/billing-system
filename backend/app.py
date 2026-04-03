@@ -25,12 +25,26 @@ def _env_clean(name, default=''):
         return ''
     return str(raw_value).replace('\ufeff', '').strip().strip('"').strip("'")
 
+
+def _normalize_log_level_name(value, default='DEBUG'):
+    normalized = str(value or '').strip().lower()
+    aliases = {
+        'debug': 'DEBUG',
+        'info': 'INFO',
+        'warn': 'WARNING',
+        'warning': 'WARNING',
+        'error': 'ERROR',
+        'err': 'ERROR',
+        'erroe': 'ERROR',
+    }
+    return aliases.get(normalized, default)
+
 APP_MODE = os.getenv('APP_MODE', 'offline').lower()  # offline | cloud
 CLOUD_ONLY_MODE = os.getenv('CLOUD_ONLY_MODE', '1') == '1'
 LOGIN_ONLY_MODE = os.getenv('LOGIN_ONLY_MODE', '1') == '1'
 ALLOW_SELF_REGISTER = (os.getenv('ALLOW_SELF_REGISTER', '0') == '1') and not LOGIN_ONLY_MODE
 AUTH_REQUIRED = CLOUD_ONLY_MODE or os.getenv('AUTH_REQUIRED', '0') == '1' or APP_MODE == 'cloud'
-LOG_LEVEL_NAME = _env_clean('BILLING_LOG_LEVEL', _env_clean('LOG_LEVEL', 'DEBUG')).upper()
+LOG_LEVEL_NAME = _normalize_log_level_name(_env_clean('BILLING_LOG_LEVEL', _env_clean('LOG_LEVEL', 'DEBUG')), 'DEBUG')
 APP_LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.DEBUG)
 app.logger.setLevel(APP_LOG_LEVEL)
 PUBLIC_PATHS = {'/api/health', '/api/auth/login', '/api/auth/register'}
